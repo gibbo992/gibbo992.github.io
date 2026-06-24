@@ -1,0 +1,896 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<meta name="theme-color" content="#0c1626"/>
+<link rel="manifest" href="manifest.webmanifest"/>
+<link rel="apple-touch-icon" href="apple-touch-icon.png"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-title" content="Trip OS"/>
+<title>Trip OS</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root{
+  --shell:#0c1626; --shell-soft:#9fb0c9; --shell-line:#23344e;
+  --canvas:#eef2f7; --surface:#ffffff; --paper:#f1f5f9;
+  --ink:#0f1825; --sub:#697588; --line:#e4e9f1;
+  --teal:#0e9b8a; --teal-ink:#0a6b5f; --teal-tint:#e4f4f1; --warm:#e0892b;
+  --danger:#cf4a2e;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  --r:16px; --shadow:0 1px 2px rgba(15,24,37,.05),0 10px 24px rgba(15,24,37,.06);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{margin:0;background:var(--canvas);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;}
+body{padding-bottom:80px;}
+a{text-decoration:none;color:var(--teal-ink);}
+button{font-family:inherit;cursor:pointer;}
+
+/* top bar — dark app chrome */
+.head{background:var(--shell);color:#fff;padding:calc(env(safe-area-inset-top) + 13px) 16px 13px;position:sticky;top:0;z-index:700;}
+.headrow{display:flex;align-items:center;justify-content:space-between;gap:10px;max-width:680px;margin:0 auto;}
+.brand{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:700;letter-spacing:-.2px;line-height:1.05;}
+.brand .bsub{display:block;font-size:9px;font-weight:700;letter-spacing:1.7px;text-transform:uppercase;color:var(--shell-soft);margin-top:2px;}
+.installbtn{flex:0 0 auto;font-size:11px;font-weight:700;letter-spacing:.2px;border:1px solid var(--shell-line);color:#fff;background:rgba(255,255,255,.07);border-radius:9px;padding:7px 12px;}
+.subhead{max-width:680px;margin:7px auto 0;font-size:11px;font-weight:600;letter-spacing:.2px;color:var(--shell-soft);}
+.subhead b{color:#fff;}
+
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:700;display:flex;background:var(--shell);padding:8px 12px calc(env(safe-area-inset-bottom) + 9px);border-top:1px solid var(--shell-line);}
+.tab{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;background:none;border:none;color:var(--shell-soft);padding:5px 4px;font-size:11px;font-weight:600;letter-spacing:.2px;border-radius:12px;}
+.tab svg{width:23px;height:23px;stroke:currentColor;fill:none;stroke-width:1.85;stroke-linecap:round;stroke-linejoin:round;}
+.tab.on{color:#fff;background:rgba(255,255,255,.07);}
+.tab.on svg{stroke:var(--teal);}
+
+.wrap{max-width:680px;margin:0 auto;padding:0 16px 36px;}
+#map{height:56vh;min-height:340px;width:100%;border-radius:var(--r);border:1px solid var(--line);z-index:0;}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-top:14px;box-shadow:var(--shadow);}
+.card.hl{box-shadow:0 0 0 2px var(--teal),var(--shadow);}
+.lab{font-size:11px;font-weight:700;letter-spacing:1.3px;text-transform:uppercase;color:var(--sub);margin:0 0 10px;}
+.lab2{font-size:12px;font-weight:800;letter-spacing:.6px;color:var(--ink);margin:24px 0 11px;display:flex;align-items:center;gap:8px;}
+.lab2:before{content:'';width:14px;height:2px;border-radius:2px;background:var(--teal);}
+.muted{font-size:12.5px;color:var(--sub);line-height:1.5;}
+
+/* chips / engine controls */
+.chips{display:flex;gap:7px;flex-wrap:wrap;}
+.chip{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:999px;padding:8px 14px;font-size:13px;font-weight:600;}
+.chip.on{background:var(--teal);color:#fff;border-color:var(--teal);}
+.chip.sm{padding:7px 12px;font-size:12px;}
+.sel{font-size:15px;font-weight:600;border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff;color:var(--ink);width:100%;-webkit-appearance:none;appearance:none;}
+.wx{display:flex;align-items:center;gap:10px;font-size:13px;font-weight:600;color:var(--ink);margin-top:10px;}
+.wxbadge{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#fff;padding:4px 9px;border-radius:999px;}
+.dry{background:var(--teal);}.wet{background:#2f80c4;}.hot{background:var(--warm);}
+
+/* suggestions */
+.sug{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:10px;box-shadow:var(--shadow);}
+.sug.top{border-color:var(--teal);box-shadow:inset 4px 0 0 var(--teal),var(--shadow);}
+.sugtop{display:flex;align-items:center;gap:8px;}
+.sugname{font-size:16px;font-weight:700;flex:1;letter-spacing:-.2px;}
+.pill{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:3px 9px;border-radius:999px;background:var(--teal-tint);color:var(--teal-ink);border:none;}
+.dots{font-family:var(--mono);font-size:11px;color:var(--warm);letter-spacing:1px;}
+.why{font-size:13px;color:var(--sub);line-height:1.45;margin-top:6px;}
+.acts{display:flex;gap:7px;margin-top:12px;flex-wrap:wrap;}
+.act{font-size:12px;font-weight:700;letter-spacing:.2px;border-radius:9px;padding:8px 13px;border:1px solid var(--line);background:#fff;color:var(--ink);}
+.act.go{border-color:transparent;color:#fff;background:var(--teal);}
+.act.love{border-color:var(--teal);}
+.act.done.on{background:var(--teal);color:#fff;border-color:var(--teal);}
+
+.sleep{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--teal);border-radius:8px;padding:14px;margin-top:14px;}
+.anchor{display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;color:var(--sub);margin-top:6px;}
+.split{background:#fbeede;border:1px solid var(--warm);border-radius:8px;padding:10px 12px;margin-top:10px;font-size:13px;color:#6b4a22;}
+.banner{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--warm);border-radius:8px;padding:11px 13px;margin-top:12px;font-size:13.5px;line-height:1.5;}
+
+/* taste / power bars */
+.tw{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+.tw b{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--sub);width:74px;}
+.twtrack{flex:1;height:6px;background:#e1e6e0;border-radius:999px;overflow:hidden;}
+.twtrack>i{display:block;height:100%;background:var(--teal);}
+.twbtns button{border:1px solid var(--line);background:#fff;border-radius:6px;width:26px;height:26px;font-weight:800;color:var(--sub);}
+
+/* ---- Route tab: departure, route strip, country cards ---- */
+.depart{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-family:var(--mono);font-size:13px;}
+.depart input[type=date]{font-family:var(--mono);font-size:13px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:#fff;color:var(--ink);}
+.depart .cd{color:var(--warm);font-weight:700;}
+.route-strip{display:flex;align-items:center;overflow-x:auto;padding:4px 2px 8px;-webkit-overflow-scrolling:touch;scrollbar-width:none;margin-top:4px;}
+.route-strip::-webkit-scrollbar{display:none;}
+.route-node{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:5px;background:none;border:none;color:var(--ink);padding:4px 2px;}
+.route-oval{font-family:var(--mono);font-weight:700;font-size:12px;letter-spacing:.5px;border:2px solid var(--teal);background:#fff;color:var(--ink);border-radius:999px;padding:5px 11px;min-width:34px;text-align:center;}
+.route-node span.cn{font-size:9.5px;color:var(--sub);text-transform:uppercase;letter-spacing:.6px;}
+.route-conn{flex:0 0 18px;height:0;border-top:2px dashed var(--line);margin-top:-16px;}
+.ch{display:flex;align-items:baseline;gap:10px;margin-bottom:8px;}
+.ccode{font-family:var(--mono);font-weight:700;font-size:11px;letter-spacing:.5px;border:2px solid var(--teal);color:var(--teal);border-radius:999px;padding:2px 9px;}
+.cname{font-size:16px;font-weight:700;margin:0;}
+.ccur{margin-left:auto;font-size:12px;color:var(--sub);font-family:var(--mono);white-space:nowrap;}
+.ctoll{margin:0 0 6px;font-size:13.5px;line-height:1.45;}
+.cextra{color:var(--sub);font-size:12.5px;line-height:1.4;margin:0;}
+
+/* currency converter */
+.row2{display:flex;gap:10px;}
+.row2>div{flex:1;}
+.field{margin-bottom:10px;}
+.field label{display:block;font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--sub);margin-bottom:4px;}
+.field input,.field select,.field textarea{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 10px;font-size:14px;font-family:var(--sans);background:#fff;color:var(--ink);}
+.field input[type=number]{font-family:var(--mono);}
+.field textarea{min-height:58px;resize:vertical;}
+.ratenote{font-size:12px;color:var(--sub);margin:6px 0 14px;}
+.ratenote.live{color:var(--teal);}
+.ratenote.err{color:var(--danger);}
+.results{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:6px;}
+.rescell{background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:10px 6px;text-align:center;}
+.rescell .cur{font-family:var(--mono);font-size:10px;color:var(--sub);text-transform:uppercase;letter-spacing:.6px;}
+.rescell .val{font-family:var(--mono);font-size:16px;margin-top:2px;}
+table.ref{width:100%;border-collapse:collapse;margin-top:14px;font-size:13px;}
+table.ref th,table.ref td{text-align:right;padding:6px 4px;border-bottom:1px solid var(--line);font-family:var(--mono);}
+table.ref th{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--sub);}
+table.ref td:first-child,table.ref th:first-child{text-align:left;}
+
+/* route weather grid */
+.wgrid{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none;}
+.wgrid::-webkit-scrollbar{display:none;}
+.wcity{flex:0 0 auto;min-width:92px;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:10px 8px;text-align:center;}
+.wcity .wn{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--sub);}
+.wcity .wt{font-family:var(--mono);font-size:20px;margin:4px 0 2px;}
+.wcity .wd{font-size:10px;color:var(--sub);line-height:1.3;}
+
+/* buttons (shared) */
+.btn{font-family:var(--mono);text-transform:uppercase;letter-spacing:.6px;font-size:12px;font-weight:700;border:none;border-radius:8px;padding:11px 16px;}
+.btn-primary{background:var(--teal);color:#fff;}
+.btn-ghost{background:none;color:var(--danger);padding:6px 8px;font-size:11px;font-weight:700;border:none;}
+
+/* spots */
+.spot-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;}
+.spot-name{font-weight:700;font-size:15px;}
+.spot-tags{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--teal);margin-top:3px;}
+.spot-notes{font-size:13.5px;margin:6px 0 4px;line-height:1.4;}
+.empty{text-align:center;color:var(--sub);font-size:13px;padding:18px 10px;}
+
+/* checklist */
+.clgroup h3{font-family:var(--mono);font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--sub);margin:18px 0 8px;}
+.clgroup:first-child h3{margin-top:0;}
+.clitem{display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px;}
+.clitem:last-child{border-bottom:none;}
+.clitem input[type=checkbox]{margin-top:2px;width:18px;height:18px;accent-color:var(--teal);flex:0 0 18px;}
+.clitem.done span{text-decoration:line-through;color:var(--sub);}
+.addrow{display:flex;gap:8px;margin-top:14px;}
+.addrow input{flex:1;border:1px solid var(--line);border-radius:8px;padding:9px 10px;font-size:14px;}
+
+/* daylight */
+.dl-row{display:flex;gap:8px;}
+.dl-cell{flex:1;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:10px 6px;text-align:center;}
+.dl-k{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--sub);}
+.dl-v{font-family:var(--mono);font-size:18px;margin-top:3px;}
+.dl-gh{font-family:var(--mono);font-size:11.5px;color:var(--warm);margin-top:10px;letter-spacing:.2px;}
+/* essentials */
+.ess-112{background:var(--teal);color:#fff;border-radius:8px;padding:12px 14px;display:flex;align-items:center;gap:13px;margin-bottom:12px;}
+.ess-112 .big{font-family:var(--mono);font-size:26px;font-weight:700;letter-spacing:1px;flex:0 0 auto;}
+.ess-112 .lbl{font-size:12.5px;line-height:1.4;}
+.ess details{border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:#fff;}
+.ess summary{font-family:var(--mono);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--ink);padding:11px 12px;cursor:pointer;list-style:none;}
+.ess summary::-webkit-details-marker{display:none;}
+.ess summary::after{content:'+';float:right;color:var(--teal);font-weight:700;}
+.ess details[open] summary::after{content:'–';}
+.ess .body{padding:0 12px 12px;font-size:13px;line-height:1.5;}
+.ess .body .k{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--sub);margin-top:9px;}
+.phr{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid var(--line);}
+.phr:last-child{border-bottom:none;}
+.phr .en{color:var(--sub);font-size:13px;}.phr .tr{font-weight:600;text-align:right;font-size:13.5px;}
+/* spend */
+.spend-cat{display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--line);}
+.spend-cat .mono{font-family:var(--mono);}
+.spend-item{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);}
+.spend-item:last-child{border-bottom:none;}
+.spend-h{font-size:14px;font-weight:600;}
+.spend-n{font-size:12px;color:var(--sub);margin-top:2px;}
+.spend-g{font-family:var(--mono);font-size:13px;color:var(--teal);white-space:nowrap;display:flex;align-items:center;gap:6px;}
+
+.map-msg{padding:26px 18px;text-align:center;color:var(--sub);font-size:13px;line-height:1.5;}
+.hostbanner{max-width:600px;margin:0 auto;padding:11px 14px;background:#fbeede;border:1px solid var(--warm);border-radius:10px;color:#6b4a22;font-size:13px;line-height:1.45;display:flex;gap:10px;align-items:flex-start;}
+.hostbanner b{color:#6b4a22;}
+.hostbanner button{flex:0 0 auto;border:none;background:none;color:#6b4a22;font-size:18px;line-height:1;cursor:pointer;padding:0 2px;}
+.hostwrap{padding:4px 16px 0;}
+
+/* collapsible info panels (grades, packraft) */
+.grades{background:#fff;border:1px solid var(--line);border-radius:10px;padding:2px 14px;margin-bottom:9px;}
+.grades summary{cursor:pointer;font-weight:700;font-size:15px;padding:11px 0;list-style:none;}
+.grades summary::-webkit-details-marker{display:none;}
+.grades summary:after{content:'';width:7px;height:7px;border-right:2px solid var(--teal);border-bottom:2px solid var(--teal);transform:rotate(45deg);float:right;margin-top:6px;transition:transform .2s;}
+.grades[open] summary:after{transform:rotate(-135deg);margin-top:9px;}
+.grades p{font-size:13.5px;line-height:1.55;margin:8px 0;}
+.grades p.muted{color:var(--sub);}
+/* via ferrata guidebook */
+.vf{background:#fff;border:1px solid var(--line);border-radius:10px;padding:13px;margin-bottom:9px;}
+.vf-top{display:flex;align-items:center;gap:8px;}
+.vf-n{font-size:16px;font-weight:700;flex:1;}
+.vf-g{font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.5px;border:1px solid var(--warm);color:var(--warm);border-radius:6px;padding:2px 8px;white-space:nowrap;}
+.vf-meta{font-family:var(--mono);font-size:11px;color:var(--sub);margin:6px 0 2px;letter-spacing:.2px;}
+.vf-cond{margin-top:4px;}
+.vf-verdict{border-radius:8px;padding:9px 11px;font-size:13px;font-weight:600;margin-top:8px;line-height:1.4;}
+.vf-ok{background:#e7f3ec;color:#1d7a51;border:1px solid #a7d2b8;}
+.vf-warn{background:#fbeede;color:#6b4a22;border:1px solid var(--warm);}
+.vf-bad{background:#fbe7e1;color:#8f3320;border:1px solid #e0a08e;}
+.vf-wx{font-family:var(--mono);font-size:11.5px;color:var(--sub);margin-top:6px;}
+/* showers */
+.shower-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);}
+.shower-row:last-child{border-bottom:none;}
+.shower-n{font-size:14px;font-weight:600;}
+.shower-m{font-family:var(--mono);font-size:11px;color:var(--sub);margin-top:2px;}
+
+/* dashboard hero */
+.hero{margin-top:16px;}
+.tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px 14px;box-shadow:var(--shadow);min-width:0;}
+.tile .k{font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--sub);}
+.tile .n{font-size:25px;font-weight:800;letter-spacing:-.6px;margin-top:5px;font-variant-numeric:tabular-nums;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tile .n small{font-size:13px;font-weight:700;color:var(--sub);letter-spacing:0;}
+.tile .s{font-size:11.5px;color:var(--sub);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tile.accent{background:linear-gradient(140deg,#0e9b8a,#0a5f57);border-color:transparent;}
+.tile.accent .k{color:rgba(255,255,255,.78);}
+.tile.accent .n,.tile.accent .n small{color:#fff;}
+.tile.accent .s{color:rgba(255,255,255,.9);}
+.progress{margin-top:12px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px 14px;box-shadow:var(--shadow);}
+.progress .bar{height:9px;border-radius:999px;background:#dde4ee;overflow:hidden;}
+.progress .bar>i{display:block;height:100%;background:linear-gradient(90deg,#0e9b8a,#39c5b2);border-radius:999px;}
+.progress .pl{display:flex;justify-content:space-between;font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--sub);margin-top:8px;}
+.progress .pl b{color:var(--teal-ink);}
+
+/* micro-interactions */
+.chip,.act,.tab,.sug,.tile{transition:background .16s ease,color .16s ease,border-color .16s ease,transform .1s ease,box-shadow .16s ease;}
+.chip:active,.act:active,.tab:active{transform:scale(.96);}
+.sug:active{transform:scale(.995);}
+@media(hover:hover){.chip:hover{border-color:var(--teal);}.act:hover{border-color:var(--teal);}.sug:hover{box-shadow:0 2px 4px rgba(15,24,37,.06),0 14px 30px rgba(15,24,37,.09);}}
+
+:focus-visible{outline:2px solid var(--teal);outline-offset:2px;}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;}}
+</style></head><body>
+<div class="head">
+  <div class="headrow">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polygon points="15.6 8.4 10.8 10.8 8.4 15.6 13.2 13.2" fill="#0e9b8a" stroke="none"/></svg>
+      <span>Trip OS<span class="bsub">van expedition</span></span>
+    </div>
+    <button id="install" class="installbtn" hidden>Install</button>
+  </div>
+  <div class="subhead" id="subhead">UK → FR → CH → IT → home</div>
+</div>
+<div class="hostwrap" id="hostwrap"></div>
+<div class="wrap"><div id="app"></div></div>
+<div class="tabs">
+  <button class="tab on" data-tab="now"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg><span>Today</span></button>
+  <button class="tab" data-tab="map"><svg viewBox="0 0 24 24"><polygon points="3 6 9 4 15 6 21 4 21 18 15 20 9 18 3 20"/><path d="M9 4v14M15 6v14"/></svg><span>Map</span></button>
+  <button class="tab" data-tab="ferrata"><svg viewBox="0 0 24 24"><path d="M3 20h18L14.5 7l-3.5 6-2-3z"/></svg><span>Ferrata</span></button>
+</div>
+<script>
+
+const POOL=[{"id":"e0","name":"Delirium Cafe","type":"explore","effort":1,"lat":50.8485,"lon":4.3539,"region":"Brussels","waze":"https://waze.com/ul?ll=50.8485,4.3539&navigate=yes","why":"The reason you're here. Open till ~4am."},{"id":"e1","name":"Grand Place","type":"explore","effort":1,"lat":50.8468,"lon":4.3524,"region":"Brussels","waze":"https://waze.com/ul?ll=50.8468,4.3524&navigate=yes","why":"Guild houses at golden hour, 2 min from Delirium."},{"id":"e2","name":"Beaune","type":"explore","effort":1,"lat":47.0237,"lon":4.8403,"region":"Burgundy","waze":"https://waze.com/ul?ll=47.0237,4.8403&navigate=yes","why":"Walkable wine town, aires nearby. Laundry chance."},{"id":"e3","name":"Pont d'Arc","type":"swim","effort":1,"lat":44.4062,"lon":4.3942,"region":"Ardeche","waze":"https://waze.com/ul?ll=44.4062,4.3942&navigate=yes","why":"The iconic arch."},{"id":"e4","name":"Balazuc","type":"explore","effort":1,"lat":44.5091,"lon":4.3727,"region":"Ardeche","waze":"https://waze.com/ul?ll=44.5091,4.3727&navigate=yes","why":"Lanes and a river beach below."},{"id":"e5","name":"Aigueze","type":"village","effort":2,"lat":44.3045,"lon":4.5556,"region":"Ardeche","waze":"https://waze.com/ul?ll=44.3045,4.5556&navigate=yes","why":"Clifftop village at the gorge's south end."},{"id":"e6","name":"Thueyts VF","type":"ferrata","effort":3,"lat":44.6721,"lon":4.2216,"region":"Ardeche","waze":"https://waze.com/ul?ll=44.6721,4.2216&navigate=yes","why":"B/C grade, 90m zipline, swim at the finish."},{"id":"e7","name":"Jaujac","type":"explore","effort":1,"lat":44.6401,"lon":4.2551,"region":"Ardeche","waze":"https://waze.com/ul?ll=44.6401,4.2551&navigate=yes","why":"Short walk, river and Roman bridge."},{"id":"e8","name":"Port-Miou","type":"swim","effort":1,"lat":43.2106,"lon":5.5142,"region":"Calanques","waze":"https://waze.com/ul?ll=43.2106,5.5142&navigate=yes","why":"Easy walk in, sheltered swimming."},{"id":"e9","name":"En-Vau","type":"explore","effort":1,"lat":43.2086,"lon":5.4938,"region":"Calanques","waze":"https://waze.com/ul?ll=43.2086,5.4938&navigate=yes","why":"Longer walk to the showstopper cove."},{"id":"e10","name":"Cassis","type":"coffee","effort":0,"lat":43.2148,"lon":5.5396,"region":"Calanques","waze":"https://waze.com/ul?ll=43.2148,5.5396&navigate=yes","why":"Harbour coffee, then Europe's highest sea-cliff road."},{"id":"e11","name":"Antibes","type":"swim","effort":1,"lat":43.5808,"lon":7.1251,"region":"Riviera","waze":"https://waze.com/ul?ll=43.5808,7.1251&navigate=yes","why":"Ramparts, market, and easy swimming."},{"id":"e12","name":"Nice","type":"village","effort":1,"lat":43.7102,"lon":7.262,"region":"Riviera","waze":"https://waze.com/ul?ll=43.7102,7.262&navigate=yes","why":"Socca, gelato, and the Baie des Anges."},{"id":"e13","name":"Eze","type":"village","effort":1,"lat":43.7276,"lon":7.3623,"region":"Riviera","waze":"https://waze.com/ul?ll=43.7276,7.3623&navigate=yes","why":"Eagle's-nest village over the sea."},{"id":"e14","name":"Levanto","type":"swim","effort":1,"lat":44.17,"lon":9.611,"region":"Cinque Terre","waze":"https://waze.com/ul?ll=44.17,9.611&navigate=yes","why":"Relaxed sand beach, base for the villages."},{"id":"e15","name":"Vernazza","type":"village","effort":1,"lat":44.135,"lon":9.684,"region":"Cinque Terre","waze":"https://waze.com/ul?ll=44.135,9.684&navigate=yes","why":"The prettiest of the five villages."},{"id":"e16","name":"Monterosso","type":"village","effort":2,"lat":44.146,"lon":9.654,"region":"Cinque Terre","waze":"https://waze.com/ul?ll=44.146,9.654&navigate=yes","why":"Classic coastal trail between villages."},{"id":"e17","name":"Varenna","type":"lake","effort":1,"lat":46.01,"lon":9.2838,"region":"Lake Como","waze":"https://waze.com/ul?ll=46.01,9.2838&navigate=yes","why":"Prettiest base on Como, lake swims."},{"id":"e18","name":"Bellagio","type":"village","effort":1,"lat":45.9773,"lon":9.2625,"region":"Lake Como","waze":"https://waze.com/ul?ll=45.9773,9.2625&navigate=yes","why":"Lido swims both sides."},{"id":"e19","name":"Brunate","type":"coffee","effort":0,"lat":45.8184,"lon":9.0891,"region":"Lake Como","waze":"https://waze.com/ul?ll=45.8184,9.0891&navigate=yes","why":"Whole lake below you."},{"id":"e20","name":"Nesso","type":"village","effort":1,"lat":45.9102,"lon":9.1556,"region":"Lake Como","waze":"https://waze.com/ul?ll=45.9102,9.1556&navigate=yes","why":"Waterfall splitting the village."},{"id":"e21","name":"Greenway","type":"swim","effort":1,"lat":46.01,"lon":9.2838,"region":"Lake Como","waze":"https://waze.com/ul?ll=46.01,9.2838&navigate=yes","why":"Lakeside path with swim spots."},{"id":"e22","name":"Sirmione","type":"swim","effort":1,"lat":45.4906,"lon":10.6063,"region":"Lake Garda","waze":"https://waze.com/ul?ll=45.4906,10.6063&navigate=yes","why":"Roman ruins, castle, warm lake swims."},{"id":"e23","name":"Verona","type":"village","effort":1,"lat":45.4384,"lon":10.9916,"region":"Lake Garda","waze":"https://waze.com/ul?ll=45.4384,10.9916&navigate=yes","why":"Roman arena and Romeo-and-Juliet lanes."},{"id":"e24","name":"Malcesine","type":"lake","effort":1,"lat":45.766,"lon":10.811,"region":"Lake Garda","waze":"https://waze.com/ul?ll=45.766,10.811&navigate=yes","why":"Cable car up, lake views, windsurf beaches."},{"id":"e25","name":"Franciacorta","type":"coffee","effort":0,"lat":45.55,"lon":10,"region":"Lake Garda","waze":"https://waze.com/ul?ll=45.55,10&navigate=yes","why":"Italy's sparkling-wine country en route."},{"id":"e26","name":"Seitan Limania","type":"swim","effort":1,"lat":35.5518,"lon":24.1934,"region":"Crete","waze":"https://waze.com/ul?ll=35.5518,24.1934&navigate=yes","why":"Turquoise slot-beach, steep approach, early."},{"id":"e27","name":"Chania","type":"village","effort":1,"lat":35.5172,"lon":24.0208,"region":"Crete","waze":"https://waze.com/ul?ll=35.5172,24.0208&navigate=yes","why":"Venetian harbour, best coffee of the trip."},{"id":"e28","name":"Samaria","type":"explore","effort":2,"lat":35.2401,"lon":23.9612,"region":"Crete","waze":"https://waze.com/ul?ll=35.2401,23.9612&navigate=yes","why":"Dawn start, 16km, swim + ferry."},{"id":"e29","name":"Loutro","type":"village","effort":1,"lat":35.2,"lon":24.0787,"region":"Crete","waze":"https://waze.com/ul?ll=35.2,24.0787&navigate=yes","why":"Carless village, swim Glyka Nera."},{"id":"e30","name":"Glyka Nera","type":"swim","effort":1,"lat":35.2018,"lon":24.1074,"region":"Crete","waze":"https://waze.com/ul?ll=35.2018,24.1074&navigate=yes","why":"Boat to the carless village."},{"id":"e31","name":"Balos","type":"swim","effort":1,"lat":35.5793,"lon":23.5887,"region":"Crete","waze":"https://waze.com/ul?ll=35.5793,23.5887&navigate=yes","why":"Shallow turquoise water, beat the crowds."},{"id":"e32","name":"La Villa","type":"ferrata","effort":3,"lat":46.589,"lon":11.9006,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.589,11.9006&navigate=yes","why":"If you've energy on arrival."},{"id":"e33","name":"Sosta Odlina","type":"explore","effort":1,"lat":46.589,"lon":11.9006,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.589,11.9006&navigate=yes","why":"Sosta, food, plan the week."},{"id":"e34","name":"Val di Funes","type":"explore","effort":2,"lat":46.6411,"lon":11.7036,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.6411,11.7036&navigate=yes","why":"Fairytale church under the Odle peaks; the Adolf Munkel Trail is a 10km loop from Malga Zannes."},{"id":"e35","name":"Lagazuoi","type":"ferrata","effort":3,"lat":46.5277,"lon":12.0081,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.5277,12.0081&navigate=yes","why":"VF + headtorch descent."},{"id":"e36","name":"Cinque Torri","type":"explore","effort":1,"lat":46.5099,"lon":12.0516,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.5099,12.0516&navigate=yes","why":"Rock towers, WWI museum, easier."},{"id":"e37","name":"Passo Giau","type":"explore","effort":1,"lat":46.4858,"lon":12.0566,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.4858,12.0566&navigate=yes","why":"One of the highest, most scenic Dolomite passes, rifugio at the top."},{"id":"e38","name":"Falzarego","type":"ferrata","effort":3,"lat":46.5191,"lon":12.0089,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.5191,12.0089&navigate=yes","why":"Ridge vs the glacier."},{"id":"e39","name":"Passo Sella","type":"explore","effort":2,"lat":46.5106,"lon":11.756,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.5106,11.756&navigate=yes","why":"Col Rodella cable car from Campitello to Passo Sella; hike to Rifugio Friedrich August for fresh Krapfen."},{"id":"e40","name":"Sella Ronda","type":"explore","effort":2,"lat":46.5106,"lon":11.756,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.5106,11.756&navigate=yes","why":"The big one: ~20km tour around the Sella massif, 6-8h."},{"id":"e41","name":"Durrensee","type":"lake","effort":1,"lat":46.6307,"lon":12.231,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.6307,12.231&navigate=yes","why":"Postcard lake, low effort."},{"id":"e42","name":"Castelrotto","type":"explore","effort":1,"lat":46.5681,"lon":11.5593,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.5681,11.5593&navigate=yes","why":"Strudel and wander."},{"id":"e43","name":"Karersee","type":"lake","effort":1,"lat":46.409,"lon":11.5772,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.409,11.5772&navigate=yes","why":"Emerald lake, easy 60-min loop, very low effort."},{"id":"e44","name":"Seiser Alm Bahn","type":"explore","effort":1,"lat":46.5417,"lon":11.5556,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.5417,11.5556&navigate=yes","why":"Cable car from Seiser Alm Bahn to Europe's largest alpine meadow (no driving up without a hotel booking)."},{"id":"e45","name":"Rifugio Dibona","type":"ferrata","effort":3,"lat":46.5324,"lon":12.07,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.5324,12.07&navigate=yes","why":"Serious route from Rifugio Dibona."},{"id":"e46","name":"Passo Tre Croci","type":"lake","effort":1,"lat":46.5836,"lon":12.182,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.5836,12.182&navigate=yes","why":"10km, 4-6h from Passo Tre Croci to a serene glacier-blue lake."},{"id":"e47","name":"Tre Cime","type":"ferrata","effort":3,"lat":46.615,"lon":12.2954,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.615,12.2954&navigate=yes","why":"Loop the three towers from Rifugio Auronzo; moderate Ferrata Innerkofler nearby. Park at Lago di Antorno early."},{"id":"e48","name":"Lago di Braies","type":"lake","effort":1,"lat":46.6931,"lon":12.0846,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.6931,12.0846&navigate=yes","why":"Beat the crowds, hire the wooden boat."},{"id":"e49","name":"Lago di Antorno","type":"lake","effort":2,"lat":46.6196,"lon":12.2588,"region":"Dolomites","waze":"https://waze.com/ul?ll=46.6196,12.2588&navigate=yes","why":"Quiet lake near Tre Cime, lovely early light."},{"id":"e55","name":"Staubbach Falls","type":"explore","effort":1,"lat":46.5896,"lon":7.9053,"region":"Switzerland","waze":"https://waze.com/ul?ll=46.5896,7.9053&navigate=yes","why":"Towering waterfall over the valley."},{"id":"e57","name":"Murren","type":"ferrata","effort":3,"lat":46.5594,"lon":7.8927,"region":"Switzerland","waze":"https://waze.com/ul?ll=46.5594,7.8927&navigate=yes","why":"Check conditions first."},{"id":"e58","name":"Gimmelwald","type":"explore","effort":1,"lat":46.5466,"lon":7.8925,"region":"Switzerland","waze":"https://waze.com/ul?ll=46.5466,7.8925&navigate=yes","why":"Quieter, equally stunning."},{"id":"e59","name":"Lauterbrunnen","type":"swim","effort":1,"lat":46.5887,"lon":7.9087,"region":"Alsace","waze":"https://waze.com/ul?ll=46.5887,7.9087&navigate=yes","why":"Lauterbrunnen valley before you leave."},{"id":"e60","name":"Eguisheim","type":"village","effort":1,"lat":48.0438,"lon":7.3069,"region":"Champagne","waze":"https://waze.com/ul?ll=48.0438,7.3069&navigate=yes","why":"Circular medieval wine village."},{"id":"e61","name":"Riquewihr","type":"village","effort":1,"lat":48.1662,"lon":7.2998,"region":"Champagne","waze":"https://waze.com/ul?ll=48.1662,7.2998&navigate=yes","why":"Postcard half-timbered village."},{"id":"e62","name":"Kaysersberg","type":"village","effort":1,"lat":48.1461,"lon":7.2537,"region":"Champagne","waze":"https://waze.com/ul?ll=48.1461,7.2537&navigate=yes","why":"Charming, less busy."},{"id":"e63","name":"Petite Venise","type":"village","effort":1,"lat":48.074,"lon":7.3573,"region":"Champagne","waze":"https://waze.com/ul?ll=48.074,7.3573&navigate=yes","why":"Canals at golden hour."},{"id":"e64","name":"Bussang VF","type":"ferrata","effort":3,"lat":47.8896,"lon":6.8827,"region":"Champagne","waze":"https://waze.com/ul?ll=47.8896,6.8827&navigate=yes","why":"~1h away - one last route."},{"id":"e65","name":"Hautvillers","type":"explore","effort":1,"lat":49.0827,"lon":3.947,"region":"Calais","waze":"https://waze.com/ul?ll=49.0827,3.947&navigate=yes","why":"Vineyard views, walk to tastings."},{"id":"e66","name":"Belvédère de Sugiton","type":"explore","effort":1,"lat":43.2161,"lon":5.452,"region":"Calanques","waze":"https://waze.com/ul?ll=43.2161,5.452&navigate=yes","why":"Easy walk from Luminy to a 250m belvedere over Sugiton and Morgiou."},{"id":"e67","name":"Calanque de Morgiou","type":"swim","effort":2,"lat":43.2086,"lon":5.4419,"region":"Calanques","waze":"https://waze.com/ul?ll=43.2086,5.4419&navigate=yes","why":"Working fishing cove with a tiny port and a cash-only beach bar."},{"id":"e68","name":"Calanque de Sormiou","type":"swim","effort":2,"lat":43.2106,"lon":5.4156,"region":"Calanques","waze":"https://waze.com/ul?ll=43.2106,5.4156&navigate=yes","why":"Big, wild cove — summer access restricted, go early or on foot."},{"id":"e69","name":"Port-Pin","type":"swim","effort":1,"lat":43.2092,"lon":5.5089,"region":"Calanques","waze":"https://waze.com/ul?ll=43.2092,5.5089&navigate=yes","why":"Pine-fringed pebble beach, sheltered, between Port-Miou and En-Vau."},{"id":"e70","name":"Cap Canaille (Route des Crêtes)","type":"explore","effort":1,"lat":43.1969,"lon":5.5853,"region":"Calanques","waze":"https://waze.com/ul?ll=43.1969,5.5853&navigate=yes","why":"Drive the clifftop road — among the highest sea cliffs in Europe, glowing at sunset."},{"id":"e71","name":"Calanque de Figuerolles","type":"swim","effort":1,"lat":43.1737,"lon":5.6006,"region":"Calanques","waze":"https://waze.com/ul?ll=43.1737,5.6006&navigate=yes","why":"La Ciotat easy-access cove, red rock and clear water, restaurant on site."},{"id":"e72","name":"Cap Ferrat coastal path","type":"explore","effort":2,"lat":43.6877,"lon":7.3304,"region":"Riviera","waze":"https://waze.com/ul?ll=43.6877,7.3304&navigate=yes","why":"Loop the billionaires peninsula on the Sentier du Littoral, swim at Paloma."},{"id":"e73","name":"Cap d’Antibes / Plage de la Garoupe","type":"swim","effort":2,"lat":43.5601,"lon":7.1303,"region":"Riviera","waze":"https://waze.com/ul?ll=43.5601,7.1303&navigate=yes","why":"Sentier de Tirepoil clifftop path to a sheltered swimming beach."},{"id":"e74","name":"Villefranche-sur-Mer","type":"village","effort":1,"lat":43.7044,"lon":7.311,"region":"Riviera","waze":"https://waze.com/ul?ll=43.7044,7.311&navigate=yes","why":"Pastel old town wrapped round one of the prettiest deep bays on the Med."},{"id":"e75","name":"Saint-Paul-de-Vence","type":"village","effort":1,"lat":43.6952,"lon":7.1226,"region":"Riviera","waze":"https://waze.com/ul?ll=43.6952,7.1226&navigate=yes","why":"Ramparted art village in the hills — galleries, fountains, Fondation Maeght."},{"id":"e76","name":"Plage Mala (Cap d’Ail)","type":"swim","effort":1,"lat":43.7195,"lon":7.4063,"region":"Riviera","waze":"https://waze.com/ul?ll=43.7195,7.4063&navigate=yes","why":"Hidden turquoise cove below the cliffs, beach-club drinks in season."},{"id":"e77","name":"Pic du Cap Roux (Estérel)","type":"explore","effort":2,"lat":43.4699,"lon":6.9015,"region":"Riviera","waze":"https://waze.com/ul?ll=43.4699,6.9015&navigate=yes","why":"Red-porphyry Estérel summit above the sea — short sharp climb, huge view."},{"id":"e78","name":"Pont du Galetas","type":"paddle","effort":1,"lat":43.7556,"lon":6.2233,"region":"Verdon","waze":"https://waze.com/ul?ll=43.7556,6.2233&navigate=yes","why":"Kayak straight into the canyon mouth — turquoise water, rentals on the spot."},{"id":"e79","name":"Lac de Sainte-Croix","type":"swim","effort":1,"lat":43.7614,"lon":6.1494,"region":"Verdon","waze":"https://waze.com/ul?ll=43.7614,6.1494&navigate=yes","why":"Calm turquoise lake with sandy coves — easy family swim and paddle."},{"id":"e80","name":"Sentier Blanc-Martel","type":"explore","effort":3,"lat":43.7918,"lon":6.3892,"region":"Verdon","waze":"https://waze.com/ul?ll=43.7918,6.3892&navigate=yes","why":"The legendary canyon-floor trail — tunnels, ladders, 14km. Headlamp and shuttle."},{"id":"e81","name":"Route des Crêtes belvederes","type":"explore","effort":1,"lat":43.7466,"lon":6.353,"region":"Verdon","waze":"https://waze.com/ul?ll=43.7466,6.353&navigate=yes","why":"Clifftop viewpoint loop (D23), 360° over the gorge, griffon vultures soaring."},{"id":"e82","name":"Moustiers-Sainte-Marie","type":"village","effort":1,"lat":43.8456,"lon":6.2214,"region":"Verdon","waze":"https://waze.com/ul?ll=43.8456,6.2214&navigate=yes","why":"Cliff-tucked pottery village with a gold star strung between the peaks."},{"id":"e83","name":"Aiguines","type":"coffee","effort":0,"lat":43.7544,"lon":6.233,"region":"Verdon","waze":"https://waze.com/ul?ll=43.7544,6.233&navigate=yes","why":"Quiet château village above the lake — a good, calm base."},{"id":"e84","name":"Lac d’Allos","type":"lake","effort":2,"lat":44.2378,"lon":6.7156,"region":"Mercantour","waze":"https://waze.com/ul?ll=44.2378,6.7156&navigate=yes","why":"Europe’s largest high-mountain lake — gentle interpretive trail from the Laus car park."},{"id":"e85","name":"Vallée des Merveilles","type":"explore","effort":3,"lat":44.0686,"lon":7.4408,"region":"Mercantour","waze":"https://waze.com/ul?ll=44.0686,7.4408&navigate=yes","why":"Open-air gallery of 37,000 Bronze-Age engravings under Mont Bégo. Long day or guided."},{"id":"e86","name":"Col de la Bonette","type":"explore","effort":1,"lat":44.3217,"lon":6.8064,"region":"Mercantour","waze":"https://waze.com/ul?ll=44.3217,6.8064&navigate=yes","why":"One of the highest paved roads in Europe (2,802m) — drive the loop, walk to the cime."},{"id":"e87","name":"Gordolasque / Lac Autier","type":"lake","effort":3,"lat":44.093,"lon":7.407,"region":"Mercantour","waze":"https://waze.com/ul?ll=44.093,7.407&navigate=yes","why":"Glacial-lake loop up the Gordolasque, chamois and ibex, past the Belle et Sébastien hut."},{"id":"e88","name":"Saint-Martin-Vésubie","type":"village","effort":1,"lat":44.0697,"lon":7.2575,"region":"Mercantour","waze":"https://waze.com/ul?ll=44.0697,7.2575&navigate=yes","why":"The Switzerland of Nice — alpine village and gateway to the Vésubie; wolves at Parc Alpha."},{"id":"e89","name":"Le Boréon","type":"lake","effort":2,"lat":44.1167,"lon":7.2667,"region":"Mercantour","waze":"https://waze.com/ul?ll=44.1167,7.2667&navigate=yes","why":"Larch-forest waterfalls and a turquoise lake under jagged peaks; Trécolpas trailhead."},{"id":"e90","name":"Via ferrata de la Colmiane","type":"ferrata","effort":3,"lat":44.0847,"lon":7.3556,"region":"Mercantour","waze":"https://waze.com/ul?ll=44.0847,7.3556&navigate=yes","why":"Cabled cliff route with rope bridges — the longest zipline in France is right here too."}], REGIONS=[{"name":"Brussels","lat":50.8268,"lon":4.2972,"sleep":"Camp in Brussels, Anderlecht - book ahead, check LEZ","arrival":"2026-06-27"},{"name":"Burgundy","lat":47.0237,"lon":4.8403,"sleep":"Beaune-area aire","arrival":"2026-06-28"},{"name":"Ardeche","lat":44.4062,"lon":4.3942,"sleep":"Vallon-area aire (D579 toward Salavas)","arrival":"2026-06-29"},{"name":"Calanques","lat":43.1748,"lon":5.6076,"sleep":"Cassis / La Ciotat area aire","arrival":"2026-07-03"},{"name":"Riviera","lat":43.5808,"lon":7.1251,"sleep":"Antibes / Villeneuve-Loubet aire","arrival":"2026-07-04"},{"name":"Verdon","lat":43.78,"lon":6.33,"sleep":"Aiguines or Les Salles-sur-Verdon aire, lakeside","arrival":"2026-07-04"},{"name":"Mercantour","lat":44.1,"lon":7.3,"sleep":"Saint-Martin-Vésubie / Le Boréon campsite","arrival":"2026-07-05"},{"name":"Cinque Terre","lat":44.17,"lon":9.611,"sleep":"Levanto camping/aire","arrival":"2026-07-05"},{"name":"Lake Como","lat":46.01,"lon":9.2838,"sleep":"Varenna / sosta near Menaggio","arrival":"2026-07-07"},{"name":"Lake Garda","lat":45.44,"lon":10.69,"sleep":"Peschiera / Sirmione area sosta","arrival":"2026-07-10"},{"name":"Milan","lat":null,"lon":null,"sleep":"","arrival":"2026-07-13"},{"name":"Crete","lat":35.5172,"lon":24.0208,"sleep":"Cretan Dream Resort, Stalos","arrival":"2026-07-14"},{"name":"Dolomites","lat":46.589,"lon":11.9006,"sleep":"Area Sosta Camper Odlina, La Villa","arrival":"2026-07-19"},{"name":"Switzerland","lat":46.5887,"lon":7.9087,"sleep":"Camping Jungfrau, Lauterbrunnen - book ahead","arrival":"2026-07-29"},{"name":"Alsace","lat":48.074,"lon":7.3573,"sleep":"Colmar (family)","arrival":"2026-07-31"},{"name":"Champagne","lat":48.074,"lon":7.3573,"sleep":"Colmar (family)","arrival":"2026-08-06"},{"name":"Calais","lat":49.0827,"lon":3.947,"sleep":"Hautvillers aire, Champagne","arrival":"2026-08-07"}], ANCHORS=[{"name":"Crete flight","date":"2026-07-14"},{"name":"Back in the van","date":"2026-07-18"},{"name":"Alsace family","date":"2026-07-31"},{"name":"Ferry home","date":"2026-08-08"}], DEFTASTE={"ferrata":5,"paddle":5,"swim":5,"lake":3,"village":3,"explore":3,"coffee":4};
+
+/* ===== type metadata ===== */
+const TYPES=['ferrata','paddle','swim','lake','village','explore','coffee'];
+const PAL={teal:'#0e9b8a',blue:'#2f80c4',cyan:'#1aa3bf',violet:'#6c5cd6',green:'#2f9e6e',amber:'#e0892b',terra:'#d2693e',gold:'#b8902f',rose:'#d85a86',slate:'#6b7686'};
+const TYPECOL={ferrata:PAL.terra,paddle:PAL.teal,swim:PAL.cyan,lake:PAL.blue,village:PAL.violet,explore:PAL.green,coffee:PAL.gold};
+const TYPE_APPEAL={ferrata:5,paddle:5,swim:5,lake:3,village:3,explore:3,coffee:4};
+
+/* ===== packraft / paddle hire (curated, offline) ===== */
+const PACKRAFT=[
+ {n:'Durance Valley — Easy Kayak Shop & packraft meetup',lat:44.787,lon:6.557,what:'The whitewater hub on the route, by the Durance (plus the Guil, Ubaye and Guisane). Paddle shop and home of the annual French Alps packrafting meetup.',url:'https://packraftingmeetupfrenchalps.wordpress.com/'},
+ {n:'JAWS packrafts — Saint-Clair-de-la-Tour (Isère)',lat:45.575,lon:5.452,what:'French alpine packraft maker at the foot of the Alps — the brand behind the rental boats; demos and advice.',url:'https://rentapackraft.com/en/'}
+];
+const PACKRAFT_LINKS=[
+ {n:'Rent a Packraft (JAWS) — home delivery',what:'Online hire of JAWS models from ~€30/day, gear included. Currently delivers in NL/BE — order 1–2 weeks ahead.',url:'https://rentapackraft.com/en/'}
+];
+
+/* ===== offline via ferrata guidebooks (French Alps, Dolomites, Switzerland) ===== */
+const FERRATA_SCALE={
+  'French Alps':'Grades F (easy) · PD · D · TD · ED (extreme) — French scale.',
+  'Dolomites':'Grades 1–6 difficulty + A–C commitment (Smith/Fletcher). 2A easy, 5+ very hard.',
+  'Switzerland':'Grades K1 (easy) to K6 (extreme) — German/Swiss Klettersteig scale.'
+};
+const FERRATA={
+ 'French Alps':[
+  {n:'La Colmiane — Baus de la Frema',g:'D',v:'+500m',t:'4–5h',s:'May–Oct',lat:44.0847,lon:7.3556,note:'Big Mercantour route: exposed ladders, rope bridges and vertical slabs to the summit. Start early in summer — it bottlenecks.'},
+  {n:'Auron — Las Donnas',g:'D/TD',v:'+194m · 1800m',t:'4h',s:'Apr–Oct',lat:44.2054,lon:6.8888,note:'Long and physical with constant rock contact; the Pilier à Strates traverse is the crux. Gear rental in Auron.'},
+  {n:'Tende',g:'D',v:'+330m · 1000m',t:'3.5h',s:'Apr–Oct',lat:44.0880,lon:7.5950,note:'Spectacular setting above Tende near the Italian border — vertical ladders and a 120m zip-line finish.'},
+  {n:'Lantosque (Vésubie)',g:'PD',v:'+100m · 950m',t:'3h',s:'Apr–Oct',lat:43.9596,lon:7.3103,note:'Canyon setting that ramps up gently — a good first via ferrata, ending with a high rope crossing.'},
+  {n:'Roubion',g:'F/PD',v:'+50m · 300m',t:'1.5h',s:'Apr–Oct',lat:44.0925,lon:7.0553,note:'Short and family-friendly: ladders, a cave and a 20m rope bridge over the Tinée. Min height ~1.30m.'},
+  {n:'Aiguillette du Lauzet (Briançon)',g:'PD/D',v:'',t:'3–4h',s:'Jun–Oct',lat:44.9850,lon:6.5020,note:'Écrins classic from Pont de l\u2019Alpe — an airy rock tower, a cave, edelweiss in July and ibex country.'},
+  {n:'Briançon — Croix de Toulouse',g:'D',v:'+250m',t:'3h',s:'Apr–Oct',lat:44.9011,lon:6.6489,note:'Sunny rock right above Briançon with big Écrins views — a popular, well-equipped half-day; gear hire in town.'},
+  {n:'Les Vigneaux (Vallouise)',g:'F/PD',v:'',t:'2h',s:'May–Oct',lat:44.8233,lon:6.4869,note:'Several linked routes from easy to harder on warm south-facing rock — an ideal Écrins family or warm-up venue.'},
+  {n:'Puget-Théniers — Demoiselles du Castagnet',g:'D',v:'+300m',t:'3h',s:'Mar–Nov',lat:43.9636,lon:6.8978,note:'Low-altitude Var route, climbable most of the year — slabs, an overhang and a long monkey bridge.'},
+  {n:'La Brigue (Roya)',g:'TD',v:'+400m',t:'4–5h',s:'Apr–Oct',lat:44.0586,lon:7.6178,note:'Technical and physical near the Italian border — among the longest in the area; not for a first outing.'},
+  {n:'Gorges de la Durance (L\u2019Argentière)',g:'F/PD/D',v:'',t:'1.5–3h',s:'Apr–Oct',lat:44.787,lon:6.557,note:'Playful multi-level routes over turquoise water near L\u2019Argentière; the easiest level is child-friendly (6+).'},
+  {n:'Gorges d\u2019Ailefroide (Pelvoux)',g:'PD/TD',v:'',t:'1.5–3.5h',s:'Jun–Oct',lat:44.880,lon:6.485,note:'Two linked Écrins sections — start easy by the tunnel, finish hard; lower part suits kids 1.30m+.'},
+  {n:'La Grande Falaise (Freissinières)',g:'TD',v:'',t:'3–4h',s:'May–Oct',lat:44.677,lon:6.475,note:'One of France\u2019s first via ferratas (1988) and once its hardest — long and strenuous.'},
+  {n:'Mines du Grand Clôt (La Grave)',g:'D/TD',v:'+750m',t:'5–6h',s:'Jul–Oct',lat:45.040,lon:6.290,note:'Wild Écrins route up a 19th-century lead mine — remote, big, memorable; descent via Le Chazelet.'},
+  {n:'Château-Queyras',g:'D',v:'',t:'2.5–3h',s:'May–Oct',lat:44.757,lon:6.795,note:'Climbs the crag below the Queyras fort above the Guil — a regional classic.'},
+  {n:'Pra Premier (Arvieux)',g:'PD/D',v:'',t:'2–3h',s:'May–Oct',lat:44.766,lon:6.745,note:'Quiet Queyras route in the Combe de la Roche near Arvieux.'},
+  {n:'Rochers de la Clapière (Ceillac)',g:'D',v:'',t:'2.5–3.5h',s:'Jun–Oct',lat:44.633,lon:6.775,note:'Scenic cliffs above Ceillac, deep in the Queyras.'},
+  {n:'La Schappe (Briançon)',g:'F/PD',v:'',t:'1.5h',s:'Apr–Oct',lat:44.895,lon:6.640,note:'Easy in-town family route by the old silk works — a gentle first taste.'},
+  {n:'L\u2019Yret (Serre Chevalier)',g:'D',v:'',t:'3h',s:'Jun–Oct',lat:44.940,lon:6.520,note:'Serre Chevalier mountain route with sweeping Briançonnais views.'},
+  {n:'Les Orres (Serre-Ponçon)',g:'PD/D',v:'',t:'2–3h',s:'May–Oct',lat:44.500,lon:6.550,note:'Routes overlooking the turquoise Lac de Serre-Ponçon.'},
+  {n:'La Grande Fistoire (Le Caire)',g:'D/TD',v:'',t:'3–4h',s:'Apr–Oct',lat:44.350,lon:6.073,note:'At La Motte-du-Caire — one of the longest via ferratas in the southern Alps.'},
+  {n:'Puy-Saint-Vincent (Torrent de la Combe)',g:'PD',v:'',t:'2h',s:'May–Oct',lat:44.760,lon:6.505,note:'Family-friendly Écrins route near Vallouise.'},
+  {n:'Dent de Burgin / Croix du Verdon (Méribel)',g:'D',v:'',t:'3h',s:'Jul–Sep',lat:45.400,lon:6.575,note:'The highest via ferrata in France (2,739m) — ridge traverse between Méribel and Courchevel; short season, start early.'},
+  {n:'Les Évettes (Chamonix)',g:'D',v:'',t:'3h',s:'Jun–Oct',lat:45.960,lon:6.880,note:'Chamonix-valley classic with suspension bridges facing Mont Blanc; La Flégère cable-car access.'},
+  {n:'Lacs Robert (Chamrousse)',g:'D/TD',v:'',t:'3h',s:'Jun–Oct',lat:45.120,lon:5.880,note:'Aerial, technical route among mountain lakes above Grenoble — no escape options, not for beginners.'},
+  {n:'La Bastille (Grenoble)',g:'PD/D',v:'',t:'2–3h',s:'Mar–Nov',lat:45.198,lon:5.724,note:'Urban classic rising from the city to the Bastille fort; ride the bubble cable-car back down.'}
+ ],
+ 'Dolomites':[
+  {n:'Brigata Tridentina (Pisciadù)',g:'3B',v:'+700m',t:'4–5h',s:'Jun–Oct',lat:46.5215,lon:11.8240,note:'The classic — sustained climbing to an iconic suspension bridge, finishing at Rifugio Pisciadù. Go at dawn; very busy.'},
+  {n:'Delle Trincee (Padon)',g:'4',v:'+640m',t:'4–5h',s:'Jul–Sep',lat:46.4600,lon:11.8800,note:'WWI ridgeline above Lago di Fedaia — grippy volcanic rock, wartime tunnels and Marmolada views.'},
+  {n:'Averau (Nuvolau)',g:'2A',v:'+150m',t:'2–3h',s:'Jun–Oct',lat:46.5170,lon:12.0300,note:'Short, fun and scenic above Passo Giau — a great warm-up with huge Dolomite views.'},
+  {n:'Ivano Dibona (Cristallo)',g:'2C',v:'',t:'5–6h',s:'Jul–Sep',lat:46.5600,lon:12.1800,note:'Long, airy WWI traverse near Cortina with a famous suspension bridge — modest technically but committing.'},
+  {n:'Cesco Tomaselli (Fanis)',g:'5',v:'+500m',t:'5–6h',s:'Jul–Sep',lat:46.5200,lon:12.0000,note:'One of the great hard classics by the Falzarego — steep and exposed, experienced ferratisti only.'},
+  {n:'Cesare Piazzetta (Piz Boè)',g:'5',v:'+650m',t:'5–7h',s:'Jul–Sep',lat:46.5100,lon:11.8400,note:'Very strenuous sustained vertical on the Sella — a serious high-mountain day.'},
+  {n:'Sass Rigais (Odle)',g:'3',v:'+500m',t:'4–5h',s:'Jul–Sep',lat:46.6092,lon:11.7592,note:'A summit route in the Val Gardena Odle — two options, real mountaineering feel, big drops.'},
+  {n:'Punta Anna (Tofana)',g:'4',v:'+450m',t:'4–6h',s:'Jul–Sep',lat:46.5408,lon:12.0561,note:'Exposed, airy and sustained on the Tofana above Cortina — links into Gianni Aglio for the full day.'},
+  {n:'Sass de Stria (Falzarego)',g:'2',v:'+200m',t:'2–3h',s:'Jun–Oct',lat:46.5231,lon:12.0006,note:'Short WWI front-line route with tunnels and trenches — modest grade, huge history, Lagazuoi views.'},
+  {n:'Piz da Cir V (Passo Gardena)',g:'2C',v:'+150m',t:'2h',s:'Jun–Oct',lat:46.5469,lon:11.8083,note:'Quick, scenic spire right by the pass — a great short outing with Sella and Gardena panoramas.'},
+  {n:'Gran Cir (Passo Gardena)',g:'1A',v:'+150m',t:'2h',s:'Jun–Oct',lat:46.546,lon:11.812,note:'A cable-assisted hike to a Sella-view summit by the pass — an ideal first via ferrata.'},
+  {n:'Sass de Putia (Passo delle Erbe)',g:'1',v:'+150m',t:'3–4h',s:'Jun–Oct',lat:46.640,lon:11.810,note:'Short exposed summit cable on a quiet northern peak; huge Puez-Odle and Marmolada panorama.'},
+  {n:'Piz da Lech (Corvara)',g:'3',v:'+250m',t:'3h',s:'Jul–Sep',lat:46.535,lon:11.870,note:'Sella-group summit above Corvara with cable-car assist — airy, popular, fine rock.'},
+  {n:'Giovanni Lipella (Tofana di Rozes)',g:'4C',v:'+700m',t:'6–8h',s:'Jul–Sep',lat:46.535,lon:12.030,note:'Long, serious Tofana route starting through a 500m WWI tunnel — bring a headtorch; committing.'},
+  {n:'Marino Bianchi (Cristallo)',g:'3C',v:'+300m',t:'4–5h',s:'Jul–Sep',lat:46.575,lon:12.165,note:'From Rifugio Lorenzi to the Cristallo summit — sustained, high and very exposed.'},
+  {n:'Sci Club 18 (Tofana)',g:'5C',v:'+250m',t:'4h',s:'Jul–Sep',lat:46.540,lon:12.090,note:'Cortina\u2019s hardest — overhanging and athletic, one of the most demanding in the Dolomites.'},
+  {n:'Sentiero Astaldi (Cortina)',g:'1',v:'+150m',t:'2–3h',s:'Jun–Oct',lat:46.545,lon:12.060,note:'Easy scenic ledge path below the Tofane — flowers, rockfall history, gentle.'},
+  {n:'De Luca / Innerkofler (Tre Cime)',g:'2C',v:'+300m',t:'4–5h',s:'Jul–Sep',lat:46.617,lon:12.305,note:'WWI tunnels and ladders on Monte Paterno from Rifugio Locatelli — atmospheric, committing.'},
+  {n:'Torre di Toblin (Tre Cime)',g:'3',v:'+200m',t:'2–3h',s:'Jul–Sep',lat:46.620,lon:12.300,note:'Steep ladder chimney to a former Austrian observation post; a tight, thrilling circuit.'},
+  {n:'Delle Bocchette Centrali (Brenta)',g:'4',v:'',t:'5–6h',s:'Jul–Sep',lat:46.165,lon:10.880,note:'The legendary Brenta ledge traverse — exposed walkways across vertical walls. Iconic and committing.'},
+  {n:'Sentiero SOSAT (Brenta)',g:'2',v:'',t:'4–5h',s:'Jul–Sep',lat:46.180,lon:10.870,note:'Classic Brenta introduction — ladders and a long ledge system under the spires.'},
+  {n:'Marmolada West Ridge (Punta Penia)',g:'4',v:'',t:'5–7h',s:'Jul–Sep',lat:46.435,lon:11.850,note:'To the 3,343m roof of the Dolomites — high and serious, glacier alongside. Check current status before going.'},
+  {n:'Cima Capi / Susatti (Lake Garda)',g:'2',v:'+350m',t:'3–4h',s:'Mar–Nov',lat:45.880,lon:10.870,note:'Easy WWI route straight above Lake Garda — low altitude, long season, lovely in spring.'},
+  {n:'Costantini (Moiazza)',g:'5',v:'',t:'8–10h',s:'Jul–Sep',lat:46.350,lon:12.030,note:'The longest in the Dolomites — a huge, demanding expedition route for experts only.'},
+  {n:'Degli Alleghesi (Civetta)',g:'4',v:'+800m',t:'8–10h',s:'Jul–Sep',lat:46.400,lon:12.030,note:'800m up Monte Civetta — among the longest; committing, stable weather only.'}
+ ],
+ 'Switzerland':[
+  {n:'Mürren–Gimmelwald',g:'K3',v:'descent',t:'2–3h',s:'Jun–Sep',lat:46.5575,lon:7.8920,note:'Right by your Lauterbrunnen base — a rare descending route with exposed faces and a Nepal suspension bridge.'},
+  {n:'Pinut (Flims)',g:'K1–K2',v:'',t:'2–3h',s:'Jun–Oct',lat:46.8470,lon:9.2900,note:'Switzerland\u2019s oldest (1739), family-friendly: 27 ladders, caves and a sideways tunnel traverse.'},
+  {n:'Allmenalp (Kandersteg)',g:'K3–K4',v:'+600m',t:'3–4h',s:'Jun–Sep',lat:46.4920,lon:7.6650,note:'Steep waterfall route with a wild 180° twisted ladder under an overhang; spray keeps it cool.'},
+  {n:'Tälli (Gadmen)',g:'K3',v:'+600m',t:'5–6h',s:'Jul–Sep',lat:46.7350,lon:8.3380,note:'Switzerland\u2019s first via ferrata (1993) — long, strenuous and remote, with Gadmer Dolomites views.'},
+  {n:'Fürenwand (Engelberg)',g:'K4',v:'+600m',t:'3–4h',s:'Jul–Sep',lat:46.7970,lon:8.4350,note:'Steep, sustained wall climb up to the Fürenalp cable car — strong arms required.'},
+  {n:'Daubenhorn (Leukerbad)',g:'K5–K6',v:'+900m',t:'6–7h',s:'Jul–Sep',lat:46.3850,lon:7.6280,note:'The longest and hardest in Switzerland: 216m of ladders, a 100m cave, real rockfall and stamina. Experts only.',cond:'https://www.viaferrata-leukerbad.ch/en/klettersteig-daubenhorn'},
+  {n:'Rochers-de-Naye (Montreux)',g:'K4',v:'+450m',t:'4h',s:'Jun–Oct',lat:46.4317,lon:6.9783,note:'Demanding route high above Lake Geneva — a vertical spur, a rope bridge and a cave; gear hire in Montreux.'},
+  {n:'Moléson (Gruyère)',g:'K2–K3',v:'+300m',t:'2–3h',s:'Jun–Oct',lat:46.5483,lon:7.0181,note:'Friendly Prealps route up the north face with cable-car access — a good step up from beginner.'},
+  {n:'Jegihorn (Saas-Grund)',g:'K3–K4',v:'+500m',t:'4–5h',s:'Jul–Sep',lat:46.1283,lon:8.0050,note:'High Valais classic on superb rock with glacier and 4000m views — one of the most scenic in the country.'},
+  {n:'Tichodrome (Noiraigue)',g:'K4',v:'+200m',t:'2–3h',s:'Apr–Oct',lat:46.9617,lon:6.7283,note:'Compact, athletic Jura route in the Creux du Van cirque — steep, low-altitude, long season.'},
+  {n:'Eiger Rotstock (Kleine Scheidegg)',g:'K3',v:'+450m',t:'3–4h',s:'Jul–Sep',lat:46.585,lon:8.000,note:'Right under the Eiger north face from Kleine Scheidegg — exposed and scenic, close to your Lauterbrunnen base.'},
+  {n:'Graustock (Engelberg)',g:'K3',v:'+300m',t:'3h',s:'Jul–Sep',lat:46.790,lon:8.430,note:'Ridge route reached from the Titlis lifts above Engelberg — fine rock, big views.'},
+  {n:'Braunwald (Glarus)',g:'K3/K4',v:'+300m',t:'3–4h',s:'Jun–Oct',lat:46.940,lon:9.010,note:'Glarus route with a Tibetan bridge and waterfalls — a fun, varied day.'}
+ ]
+};
+
+/* ===== country reference (tolls / vignettes / currency) ===== */
+/* ===== state + storage ===== */
+const KEY='tripos_v1';
+let S={tab:'now',region:REGIONS[0].name,you:1,reb:1,load:'rested',wx:null,manualWet:false,manualHot:false,visited:{},discovered:{},showers:{},aires:{},taste:Object.assign({},DEFTASTE),battery:80,filter:'all'};
+try{const r=localStorage.getItem(KEY);if(r)S=Object.assign(S,JSON.parse(r));}catch(e){}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}}
+
+/* legacy van-* keys preserved so existing data carries over */
+function loadValue(k,fb){try{const r=localStorage.getItem(k);return r===null?fb:JSON.parse(r);}catch(e){return fb;}}
+function saveValue(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
+
+/* shared working data */
+let depDate=loadValue('van-departure-date','');
+
+/* ===== helpers ===== */
+function regionMeta(n){return REGIONS.find(r=>r.name===n);}
+function daysBetween(a,b){return Math.round((new Date(b)-new Date(a))/86400000);}
+function nextAnchor(fromISO){for(const a of ANCHORS){if(daysBetween(fromISO,a.date)>=0)return a;}return null;}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+/* ===== OSM gem discovery (Overpass — finds things you didn't plan) ===== */
+function distKm(aLat,aLon,bLat,bLon){
+  const R=6371,dLat=(bLat-aLat)*Math.PI/180,dLon=(bLon-aLon)*Math.PI/180;
+  const s=Math.sin(dLat/2)**2+Math.cos(aLat*Math.PI/180)*Math.cos(bLat*Math.PI/180)*Math.sin(dLon/2)**2;
+  return Math.round(2*R*Math.asin(Math.sqrt(s)));
+}
+function allExps(){let extra=[];const d=S.discovered||{};Object.keys(d).forEach(k=>{extra=extra.concat(d[k]||[]);});return POOL.concat(extra);}
+const OSM_RULES=[
+  {q:'node["natural"="waterfall"]',test:t=>t.natural==='waterfall',type:'explore',effort:1,kind:'Waterfall'},
+  {q:'node["tourism"="viewpoint"]',test:t=>t.tourism==='viewpoint',type:'explore',effort:1,kind:'Viewpoint'},
+  {q:'node["natural"="beach"]',test:t=>t.natural==='beach',type:'swim',effort:1,kind:'Beach'},
+  {q:'way["natural"="beach"]',test:t=>t.natural==='beach',type:'swim',effort:1,kind:'Beach'},
+  {q:'way["highway"="via_ferrata"]',test:t=>t.highway==='via_ferrata'||t['climbing:via_ferrata']==='yes',type:'ferrata',effort:3,kind:'Via ferrata'},
+  {q:'node["sport"="climbing"]["climbing:via_ferrata"="yes"]',test:t=>t['climbing:via_ferrata']==='yes',type:'ferrata',effort:3,kind:'Via ferrata'}
+];
+let discovering=false;
+function discoverBtn(){
+  const m=regionMeta(S.region);
+  if(!m||m.lat==null)return '<div class="muted" style="margin-top:10px">No coordinates for this stop — gem discovery unavailable here.</div>';
+  const found=(S.discovered&&S.discovered[S.region])||[];
+  const label=discovering?'Searching OpenStreetMap…':(found.length?(found.length+' gems found · search again'):'Find gems near here');
+  return '<button class="chip sm" id="discover" style="margin-top:8px"'+(discovering?' disabled':'')+'>'+label+'</button><div class="muted" id="disc-note" style="margin-top:8px"></div>';
+}
+async function doDiscover(){
+  const m=regionMeta(S.region); if(!m||m.lat==null||discovering)return;
+  discovering=true; render();
+  const R=15000;
+  const body='[out:json][timeout:25];('+OSM_RULES.map(r=>r.q+'(around:'+R+','+m.lat+','+m.lon+');').join('')+');out center 80;';
+  try{
+    const j=await fetchJSON('https://overpass-api.de/api/interpreter',{method:'POST',body:'data='+encodeURIComponent(body)},25000);
+    const existing=POOL.filter(e=>e.region===S.region).concat((S.discovered&&S.discovered[S.region])||[]);
+    const out=[],seen={};
+    (j.elements||[]).forEach(el=>{
+      const lat=el.lat!=null?el.lat:(el.center&&el.center.lat),lon=el.lon!=null?el.lon:(el.center&&el.center.lon);
+      if(lat==null||lon==null)return;
+      const tags=el.tags||{};
+      const rule=OSM_RULES.find(r=>r.test(tags)); if(!rule)return;
+      const name=tags.name||tags['name:en']||rule.kind;
+      const key=name.toLowerCase()+'|'+lat.toFixed(3)+'|'+lon.toFixed(3); if(seen[key])return; seen[key]=1;
+      const dup=existing.some(e=>e.name.toLowerCase()===name.toLowerCase()||(e.lat!=null&&distKm(e.lat,e.lon,lat,lon)===0));
+      if(dup)return;
+      const d=distKm(m.lat,m.lon,lat,lon);
+      out.push({id:'osm-'+el.type[0]+el.id,name:name,type:rule.type,effort:rule.effort,lat:lat,lon:lon,region:S.region,
+        waze:'https://waze.com/ul?ll='+lat+','+lon+'&navigate=yes',
+        why:rule.kind+' · ~'+d+' km away · found on OpenStreetMap',osm:true});
+    });
+    out.sort((a,b)=>distKm(m.lat,m.lon,a.lat,a.lon)-distKm(m.lat,m.lon,b.lat,b.lon));
+    S.discovered=S.discovered||{}; S.discovered[S.region]=out.slice(0,12); save();
+    discovering=false; render();
+    const n=document.getElementById('disc-note');
+    if(n)n.textContent=S.discovered[S.region].length?(S.discovered[S.region].length+' new spots added to your picks and the map.'):'No new gems found nearby — your plan already covers this area.';
+  }catch(e){
+    discovering=false; render();
+    const n=document.getElementById('disc-note');
+    if(n)n.textContent="Couldn't reach OpenStreetMap — it needs a connection. Try again when you have signal.";
+  }
+}
+
+/* ===== weather (region, drives the engine) ===== */
+function wcat(code){return code>=51?'wet':'dry';}
+async function fetchJSON(url,opts,ms){
+  let ctrl=null,t=null;
+  try{ if('AbortController' in window){ ctrl=new AbortController(); t=setTimeout(()=>ctrl.abort(),ms||8000); } }catch(e){}
+  try{
+    const r=await fetch(url,Object.assign({},opts||{},ctrl?{signal:ctrl.signal}:{}));
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    return await r.json();
+  } finally { if(t)clearTimeout(t); }
+}
+async function fetchWx(m){
+  try{
+    const u='https://api.open-meteo.com/v1/forecast?latitude='+m.lat+'&longitude='+m.lon+'&current=temperature_2m,weather_code&daily=sunrise,sunset&timezone=auto';
+    const j=await fetchJSON(u); if(!j.current)throw 0;
+    const dl=j.daily||{};
+    return {temp:Math.round(j.current.temperature_2m),code:j.current.weather_code,wet:wcat(j.current.weather_code)==='wet',hot:j.current.temperature_2m>=26,live:true,
+      sunrise:dl.sunrise&&dl.sunrise[0],sunset:dl.sunset&&dl.sunset[0]};
+  }catch(e){return null;}
+}
+/* daylight helpers (work purely off the two ISO timestamps — timezone-safe) */
+function hm(iso){if(!iso)return null;const t=iso.split('T')[1];return t?t.slice(0,5):null;}
+function minsOf(iso){if(!iso)return null;const p=hm(iso);if(!p)return null;const[h,m]=p.split(':').map(Number);return h*60+m;}
+function fmtDur(mins){const h=Math.floor(mins/60),m=mins%60;return h+'h '+(m<10?'0':'')+m+'m';}
+function addMins(iso,delta){const mm=minsOf(iso);if(mm==null)return null;let t=mm+delta;t=((t%1440)+1440)%1440;const h=Math.floor(t/60),m=t%60;return (h<10?'0':'')+h+':'+(m<10?'0':'')+m;}
+function daylightHtml(wx){
+  if(!wx||!wx.sunrise||!wx.sunset)return '';
+  const sr=hm(wx.sunrise),ss=hm(wx.sunset);
+  const len=minsOf(wx.sunset)-minsOf(wx.sunrise);
+  const ghPmStart=addMins(wx.sunset,-60), ghAmEnd=addMins(wx.sunrise,60);
+  return '<div class="card"><div class="lab">Daylight — '+escapeHtml(S.region)+'</div>'
+    +'<div class="dl-row"><div class="dl-cell"><div class="dl-k">Sunrise</div><div class="dl-v">'+sr+'</div></div>'
+    +'<div class="dl-cell"><div class="dl-k">Sunset</div><div class="dl-v">'+ss+'</div></div>'
+    +'<div class="dl-cell"><div class="dl-k">Day length</div><div class="dl-v">'+fmtDur(len)+'</div></div></div>'
+    +'<div class="dl-gh">Golden hour ·  morning '+sr+'–'+ghAmEnd+'  ·  evening '+ghPmStart+'–'+ss+'</div>'
+    +'<div class="muted" style="margin-top:6px">Aim to be parked up before '+ss+' for the easy mountain drives.</div></div>';
+}
+
+/* ===== scoring engine ===== */
+function energyVal(){return (S.you+S.reb)/2;}
+function ctxNow(){const wx=S.wx||{wet:S.manualWet,hot:S.manualHot,live:false};return {wet:wx.wet,hot:wx.hot,energy:energyVal(),load:S.load};}
+function scoreExp(e,c){
+  let s=(TYPE_APPEAL[e.type]!=null?TYPE_APPEAL[e.type]:2);
+  if(c.wet){if(e.type==='ferrata')s-=4;if(e.type==='paddle')s-=2;if(e.type==='swim')s-=2;if(['coffee','village','explore','lake'].includes(e.type))s+=1;}
+  if(c.hot){if(e.type==='swim')s+=2;if(e.type==='ferrata')s-=1;}
+  if(!c.wet){if(e.type==='ferrata')s+=1;}
+  if(c.energy>=1.5){if(e.effort>=2)s+=1;}else if(c.energy<=0.5){if(e.effort>=2)s-=3;if(e.effort<=1)s+=1;}
+  if(c.load==='heavy'){if(e.effort>=2)s-=3;if(['swim','coffee','lake'].includes(e.type))s+=1.5;}
+  else if(c.load==='some'){if(e.effort>=3)s-=1;}
+  return s;
+}
+
+/* ===== map ===== */
+let map=null,layer=null,mapOK=false;
+function teardownMap(){ if(map){try{map.remove();}catch(e){}} map=null; layer=null; mapOK=false; }
+function ensureMap(){
+  if(mapOK&&map)return true;
+  const el=document.getElementById('map'); if(!el)return false;
+  if(!(window.L&&window.L.map)){
+    el.innerHTML='<div class="map-msg">Map library didn\u2019t load — it needs a connection the first time. Reconnect and reopen this tab.</div>';
+    return false;
+  }
+  try{
+    map=L.map('map',{zoomControl:true,attributionControl:true}).setView([46.5,9],5);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors'}).addTo(map);
+    layer=L.layerGroup().addTo(map); mapOK=true;
+  }catch(e){ mapOK=false; }
+  return mapOK;
+}
+function drawMap(){
+  if(!ensureMap())return;
+  layer.clearLayers(); const b=[];
+  allExps().filter(e=>S.filter==='all'||e.type===S.filter).forEach(e=>{
+    if(e.lat==null||e.lon==null)return;
+    const col=TYPECOL[e.type]||'#555';
+    const mk=e.osm
+      ? L.circleMarker([e.lat,e.lon],{radius:6,color:col,weight:2.5,fillColor:'#fff',fillOpacity:1}).addTo(layer)
+      : L.circleMarker([e.lat,e.lon],{radius:6,color:'#fff',weight:1.5,fillColor:col,fillOpacity:1}).addTo(layer);
+    mk.bindPopup('<b>'+e.name+'</b><br>'+(e.osm?'found · ':'')+e.type+' · '+e.region+'<br><a href="'+e.waze+'" target="_blank">Navigate</a>');
+    b.push([e.lat,e.lon]);
+  });
+  if(S.filter==='all'||S.filter==='shower'){
+    allShowers().forEach(s=>{
+      if(s.lat==null||s.lon==null)return;
+      const mk=L.circleMarker([s.lat,s.lon],{radius:6,color:'#fff',weight:1.5,fillColor:PAL.blue,fillOpacity:1}).addTo(layer);
+      mk.bindPopup('<b>'+s.name+'</b><br>shower'+(s.fee?' · '+s.fee:'')+'<br><a href="'+s.waze+'" target="_blank">Navigate</a>');
+      b.push([s.lat,s.lon]);
+    });
+  }
+  if(S.filter==='all'||S.filter==='packraft'){
+    PACKRAFT.forEach(p=>{
+      const mk=L.circleMarker([p.lat,p.lon],{radius:6,color:'#fff',weight:1.5,fillColor:PAL.teal,fillOpacity:1}).addTo(layer);
+      mk.bindPopup('<b>'+p.n+'</b><br>packraft / paddle hire<br><a href="https://waze.com/ul?ll='+p.lat+','+p.lon+'&navigate=yes" target="_blank">Navigate</a> · <a href="'+p.url+'" target="_blank">Website ↗</a>');
+      b.push([p.lat,p.lon]);
+    });
+  }
+  if(S.filter==='all'||S.filter==='aire'){
+    allAires().forEach(s=>{
+      if(s.lat==null||s.lon==null)return;
+      const mk=L.circleMarker([s.lat,s.lon],{radius:6,color:'#fff',weight:1.5,fillColor:PAL.amber,fillOpacity:1}).addTo(layer);
+      mk.bindPopup('<b>'+s.name+'</b><br>aire / camper stop<br><a href="'+s.waze+'" target="_blank">Navigate</a>');
+      b.push([s.lat,s.lon]);
+    });
+  }
+  if(S.filter==='all'||S.filter==='ferrata'){
+    allFerrata().forEach(f=>{
+      if(f.lat==null||f.lon==null)return;
+      const mk=L.circleMarker([f.lat,f.lon],{radius:6,color:'#fff',weight:1.5,fillColor:PAL.terra,fillOpacity:1}).addTo(layer);
+      const det=[f.v,f.t,f.s].filter(Boolean).join(' · ');
+      mk.bindPopup('<b>'+f.n+'</b><br>via ferrata · grade '+f.g+' · '+f.region+(det?'<br>'+det:'')+'<br><a href="https://waze.com/ul?ll='+f.lat+','+f.lon+'&navigate=yes" target="_blank">Navigate</a> · <a href="https://www.google.com/search?q='+encodeURIComponent(f.n+' '+(f.region==='Switzerland'?'klettersteig':'via ferrata')+' topo')+'" target="_blank">Topo ↗</a>');
+      b.push([f.lat,f.lon]);
+    });
+  }
+  // invalidate AFTER the container has laid out, then fit — prevents grey/half-loaded tiles
+  const finish=()=>{ if(!mapOK||!map)return; map.invalidateSize(); if(b.length)map.fitBounds(b,{padding:[30,30],maxZoom:12}); };
+  requestAnimationFrame(()=>setTimeout(finish,60));
+}
+
+/* ===== render dispatch ===== */
+const A=document.getElementById('app');
+function setTab(t){S.tab=t;save();render();}
+function render(){
+  if(!['now','map','ferrata'].includes(S.tab))S.tab='now';
+  if(S.tab!=='map')teardownMap();   // release Leaflet when leaving the map so it rebuilds clean next time
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x.getAttribute('data-tab')===S.tab));
+  if(S.tab==='map')renderMap();
+  else if(S.tab==='ferrata')renderFerrata();
+  else renderNow();
+}
+function effDots(n){return '●'.repeat(n)+'○'.repeat(3-n);}
+
+/* ===== NOW ===== */
+/* ===== dashboard hero ===== */
+const TRIP={start:'2026-06-27',days:44};
+function tripDay(){const n=daysBetween(TRIP.start,new Date().toISOString().slice(0,10))+1;return Math.max(1,Math.min(TRIP.days,n));}
+function dashHero(){
+  const m=regionMeta(S.region); const wx=S.wx;
+  const day=tripDay(); const pct=Math.round(day/TRIP.days*100);
+  const todayISO=new Date().toISOString().slice(0,10);
+  const na=nextAnchor(todayISO);
+  let nextN='Trip complete', nextS='you made it';
+  if(na){const dd=daysBetween(todayISO,na.date);nextN=na.name;nextS=dd<=0?'today':('in '+dd+' day'+(dd===1?'':'s'));}
+  const condN = wx?(wx.temp+'°C'):'—';
+  const condS = wx?(wx.wet?'wet — slippery rock':(wx.hot?'hot — find water':'dry — good to go')):'set weather below';
+  const sleep = m&&m.sleep ? (m.sleep.length>30?m.sleep.slice(0,28)+'…':m.sleep) : 'pick a stop';
+  let h='<div class="hero"><div class="tiles">';
+  h+='<div class="tile accent"><div class="k">Trip day</div><div class="n">'+day+'<small> / '+TRIP.days+'</small></div><div class="s">'+pct+'% complete</div></div>';
+  h+='<div class="tile"><div class="k">Next anchor</div><div class="n" style="font-size:17px">'+escapeHtml(nextN)+'</div><div class="s">'+nextS+'</div></div>';
+  h+='<div class="tile"><div class="k">Current base</div><div class="n" style="font-size:17px">'+escapeHtml(S.region)+'</div><div class="s">'+escapeHtml(sleep)+'</div></div>';
+  h+='<div class="tile"><div class="k">Conditions</div><div class="n">'+condN+'</div><div class="s">'+condS+'</div></div>';
+  h+='</div><div class="progress"><div class="bar"><i style="width:'+pct+'%"></i></div><div class="pl"><span>'+escapeHtml(REGIONS[0].name)+'</span><span><b>Day '+day+'</b></span><span>Home</span></div></div></div>';
+  return h;
+}
+function renderNow(){
+  const m=regionMeta(S.region); const c=ctxNow();
+  const regExps=POOL.filter(e=>e.region===S.region).concat((S.discovered&&S.discovered[S.region])||[]);
+  const pool=regExps.map(e=>({e,s:scoreExp(e,c)})).sort((a,b)=>b.s-a.s);
+  const wx=S.wx;
+  let h=dashHero();
+  h+='<div class="card"><div class="lab">Where are you</div>';
+  h+='<select class="sel" id="regsel">'+REGIONS.map(r=>'<option'+(r.name===S.region?' selected':'')+'>'+r.name+'</option>').join('')+'</select>';
+  h+='<button class="chip sm" id="geo" style="margin-top:8px"'+(geoBusy?' disabled':'')+'>'+(geoBusy?'Locating…':'Use my location')+'</button>';
+  if(geoMsg)h+='<div class="muted" id="geo-note" style="margin-top:6px">'+geoMsg+'</div>';
+  h+=discoverBtn();
+  h+=showersBtn();
+  h+=airesBtn();
+  if(wx){h+='<div class="wx"><span class="wxbadge '+(wx.wet?'wet':(wx.hot?'hot':'dry'))+'">'+(wx.wet?'Wet':(wx.hot?'Hot':'Dry'))+'</span><span>'+wx.temp+'°C'+(wx.live?' · live':'')+'</span></div>';}
+  else{h+='<div class="lab" style="margin:14px 0 7px">Weather (tap if no signal)</div>'+(wxFailed?'<div class="muted" style="margin:0 0 8px;color:var(--warm)">Couldn\u2019t reach live weather — set it manually.</div>':'')+'<div class="chips"><button class="chip sm '+(!S.manualWet?'on':'')+'" data-wx="dry">Dry</button><button class="chip sm '+(S.manualWet?'on':'')+'" data-wx="wet">Wet</button><button class="chip sm '+(S.manualHot?'on':'')+'" data-wx="hot">Hot</button></div>';}
+  h+='</div>';
+
+  h+=daylightHtml(wx);
+
+  h+='<div class="card"><div class="lab">Energy — you</div><div class="chips">'+[['Fresh',2],['OK',1],['Low',0]].map(o=>'<button class="chip sm '+(S.you===o[1]?'on':'')+'" data-you="'+o[1]+'">'+o[0]+'</button>').join('')+'</div>';
+  h+='<div class="lab" style="margin-top:14px">Energy — Rebecca</div><div class="chips">'+[['Fresh',2],['OK',1],['Low',0]].map(o=>'<button class="chip sm '+(S.reb===o[1]?'on':'')+'" data-reb="'+o[1]+'">'+o[0]+'</button>').join('')+'</div>';
+  h+='<div class="lab" style="margin-top:14px">Recent effort</div><div class="chips">'+[['Rested','rested'],['Some','some'],['Heavy','heavy']].map(o=>'<button class="chip sm '+(S.load===o[1]?'on':'')+'" data-load="'+o[1]+'">'+o[0]+'</button>').join('')+'</div></div>';
+
+  if(Math.abs(S.you-S.reb)>=2){h+='<div class="split"><b>Split day?</b> You two are far apart on energy — maybe one does a big route while the other takes a swim-and-coffee, regroup for dinner.</div>';}
+  if(c.load==='heavy'){h+='<div class="banner"><b>Recovery suggested.</b> You\'ve logged some hard days — the picks below lean gentle on purpose.</div>';}
+
+  h+='<div class="lab2">What to do — '+S.region+'</div>';
+  if(!pool.length){h+='<div class="muted">No options seeded here yet.</div>';}
+  pool.slice(0,6).forEach((p,i)=>{
+    const e=p.e;
+    h+='<div class="sug'+(i===0&&p.s>0?' top':'')+'"><div class="sugtop"><span class="sugname">'+e.name+'</span><span class="pill">'+e.type+'</span>'+(e.osm?'<span class="pill" style="border-color:var(--warm);color:var(--warm)">found</span>':'')+'<span class="dots">'+effDots(e.effort)+'</span></div>';
+    if(e.why)h+='<div class="why">'+e.why+'</div>';
+    h+='<div class="acts"><a class="act go" href="'+e.waze+'" target="_blank">Navigate</a></div></div>';
+  });
+
+  if(m){h+='<div class="sleep"><div class="lab" style="margin:0 0 6px">Tonight</div><div style="font-weight:600">'+(m.sleep||'(pick a spot)')+'</div>';
+    const na=nextAnchor(m.arrival);
+    if(na){const dd=daysBetween(m.arrival,na.date);h+='<div class="anchor"><span>Next anchor: '+na.name+'</span><span>'+(dd<=0?'now':dd+' days')+'</span></div>';}
+    h+='</div>';}
+  h+=packraftCard();
+  h+='<div style="text-align:center;margin-top:20px"><button class="chip sm" id="reset">Reset app data</button></div>';
+  A.innerHTML=h;
+}
+
+/* ===== MAP ===== */
+function renderMap(){
+  teardownMap();
+  let h='<div class="card" style="padding:10px"><div id="map"></div></div>';
+  h+='<div class="chips" style="margin-top:12px"><button class="chip sm '+(S.filter==='all'?'on':'')+'" data-f="all">All</button>'+TYPES.map(t=>'<button class="chip sm '+(S.filter===t?'on':'')+'" data-f="'+t+'">'+t+'</button>').join('')+'<button class="chip sm '+(S.filter==='shower'?'on':'')+'" data-f="shower">showers</button><button class="chip sm '+(S.filter==='packraft'?'on':'')+'" data-f="packraft">packraft</button><button class="chip sm '+(S.filter==='aire'?'on':'')+'" data-f="aire">aires</button></div>';
+  h+='<div class="muted" style="margin-top:10px">'+allExps().length+' places · '+allFerrata().length+' via ferratas'+(allAires().length?' · '+allAires().length+' aires':'')+(allShowers().length?' · '+allShowers().length+' showers':'')+'. Tap a pin to navigate. Use the chips to filter — the <b>ferrata</b> chip shows every route (tap one for its grade).</div>';
+  A.innerHTML=h; drawMap();
+}
+
+/* ===== SHOWERS (public shower directory via OSM) ===== */
+function allShowers(){let out=[];const d=S.showers||{};Object.keys(d).forEach(k=>{out=out.concat(d[k]||[]);});return out;}
+let showering=false;
+function showersBtn(){
+  const m=regionMeta(S.region);
+  if(!m||m.lat==null)return '';
+  const found=(S.showers&&S.showers[S.region])||[];
+  const label=showering?'Searching showers…':(found.length?(found.length+' showers found · search again'):'Find public showers');
+  return '<button class="chip sm" id="showers" style="margin-top:8px"'+(showering?' disabled':'')+'>'+label+'</button> <a class="chip sm" href="https://showersdirectory.com/" target="_blank" rel="noopener" style="margin-top:8px;text-decoration:none">ShowersDirectory ↗</a><div class="muted" id="show-note" style="margin-top:8px"></div>'+showerList();
+}
+function showerList(){
+  const found=(S.showers&&S.showers[S.region])||[];
+  if(!found.length)return '';
+  let h='<div style="margin-top:10px">';
+  found.slice(0,12).forEach(s=>{h+='<div class="shower-row"><div><div class="shower-n">'+escapeHtml(s.name)+'</div><div class="shower-m">'+escapeHtml(s.meta||'shower')+'</div></div><a class="act go" href="'+s.waze+'" target="_blank">Navigate</a></div>';});
+  h+='</div>';
+  return h;
+}
+async function doShowers(){
+  const m=regionMeta(S.region); if(!m||m.lat==null||showering)return;
+  showering=true; render();
+  const R=15000;
+  const body='[out:json][timeout:25];(node(around:'+R+','+m.lat+','+m.lon+')[amenity=shower];way(around:'+R+','+m.lat+','+m.lon+')[amenity=shower];);out center 60;';
+  try{
+    const j=await fetchJSON('https://overpass-api.de/api/interpreter',{method:'POST',body:'data='+encodeURIComponent(body)},25000);
+    const out=[],seen={};
+    // OSM amenity=shower also tags showers at refuges and social services; screen those out.
+    const SOCIAL=/(homeless|sans[\s-]?abri|\bsdf\b|shelter|refuge|foyer|secours|samu|croix[\s-]?rouge|red[\s-]?cross|caritas|emma(?:ü|u)s|restos?\s+du\s+c|arm[ée]+e?\s+du\s+salut|salvation|accueil\s+de\s+jour|\bccas\b|diacon|sans[\s-]?domicile|migrant|asile|asylum|abrigo|albergue|obdach)/i;
+    let dropped=0;
+    (j.elements||[]).forEach(el=>{
+      const lat=el.lat!=null?el.lat:(el.center&&el.center.lat),lon=el.lon!=null?el.lon:(el.center&&el.center.lon);
+      if(lat==null||lon==null)return;
+      const tg=el.tags||{};
+      // skip social-facility showers and non-public access
+      const hay=[tg.name,tg.operator,tg.description,tg['social_facility'],tg['social_facility:for'],tg.operator_type].filter(Boolean).join(' ');
+      if(tg.social_facility||tg['social_facility:for']||tg.healthcare||SOCIAL.test(hay)){dropped++;return;}
+      if(tg.access==='private'||tg.access==='no'){dropped++;return;}
+      const name=tg.name||tg.operator||'Public shower';
+      const key=name.toLowerCase()+'|'+lat.toFixed(3)+'|'+lon.toFixed(3); if(seen[key])return; seen[key]=1;
+      const bits=[]; if(tg.fee==='yes')bits.push('paid'); else if(tg.fee==='no')bits.push('free'); if(tg['shower:hot']==='yes'||tg.hot_water==='yes')bits.push('hot'); if(tg.access&&tg.access!=='yes')bits.push(tg.access);
+      const d=distKm(m.lat,m.lon,lat,lon);
+      out.push({id:'sh-'+el.type[0]+el.id,name:name,lat:lat,lon:lon,fee:tg.fee==='yes'?'paid':(tg.fee==='no'?'free':''),meta:(bits.length?bits.join(' · ')+' · ':'')+'~'+d+' km',waze:'https://waze.com/ul?ll='+lat+','+lon+'&navigate=yes',d:d});
+    });
+    out.sort((a,b)=>a.d-b.d);
+    S.showers=S.showers||{}; S.showers[S.region]=out.slice(0,15); save();
+    showering=false; render();
+    const n=document.getElementById('show-note');
+    if(n)n.textContent=(out.length?(out.length+' showers from OpenStreetMap'+(dropped?' ('+dropped+' social-service/private filtered out)':'')+' — also try campsites, marinas, pools and beach taps.'):'No suitable public showers mapped within 15 km — campsites, marinas, municipal pools and beach showers are your best bet.')+' Listings are community-mapped, so double-check before relying on one.';
+  }catch(e){
+    showering=false; render();
+    const n=document.getElementById('show-note');
+    if(n)n.textContent="Couldn\u2019t reach the shower directory — needs a connection. Try again when you have signal.";
+  }
+}
+
+/* ===== AIRES / camper stops (OSM caravan_site + curated map link) ===== */
+function allAires(){let out=[];const d=S.aires||{};Object.keys(d).forEach(k=>{out=out.concat(d[k]||[]);});return out;}
+function allFerrata(){let out=[];Object.keys(FERRATA).forEach(region=>{(FERRATA[region]||[]).forEach(f=>{out.push(Object.assign({region:region},f));});});return out;}
+let airing=false;
+function airesBtn(){
+  const m=regionMeta(S.region);
+  if(!m||m.lat==null)return '';
+  const found=(S.aires&&S.aires[S.region])||[];
+  const label=airing?'Searching aires…':(found.length?(found.length+' aires found · search again'):'Find aires nearby');
+  return '<button class="chip sm" id="aires" style="margin-top:8px"'+(airing?' disabled':'')+'>'+label+'</button> <a class="chip sm" href="https://www.wildcamping-moonfruit.com/european-aires-camper-stops" target="_blank" rel="noopener" style="margin-top:8px;text-decoration:none">Aires map ↗</a><div class="muted" id="aire-note" style="margin-top:8px"></div>'+aireList();
+}
+function aireList(){
+  const found=(S.aires&&S.aires[S.region])||[];
+  if(!found.length)return '';
+  let h='<div style="margin-top:10px">';
+  found.slice(0,12).forEach(s=>{h+='<div class="shower-row"><div><div class="shower-n">'+escapeHtml(s.name)+'</div><div class="shower-m">'+escapeHtml(s.meta||'camper stop')+'</div></div><a class="act go" href="'+s.waze+'" target="_blank">Navigate</a></div>';});
+  h+='</div>';
+  return h;
+}
+async function doAires(){
+  const m=regionMeta(S.region); if(!m||m.lat==null||airing)return;
+  airing=true; render();
+  const R=20000;
+  const body='[out:json][timeout:25];(node(around:'+R+','+m.lat+','+m.lon+')[tourism=caravan_site];way(around:'+R+','+m.lat+','+m.lon+')[tourism=caravan_site];);out center 80;';
+  try{
+    const j=await fetchJSON('https://overpass-api.de/api/interpreter',{method:'POST',body:'data='+encodeURIComponent(body)},25000);
+    const out=[],seen={};
+    (j.elements||[]).forEach(el=>{
+      const lat=el.lat!=null?el.lat:(el.center&&el.center.lat),lon=el.lon!=null?el.lon:(el.center&&el.center.lon);
+      if(lat==null||lon==null)return;
+      const tg=el.tags||{};
+      if(tg.access==='private'||tg.access==='no')return;
+      const name=tg.name||tg.operator||'Aire / camper stop';
+      const key=name.toLowerCase()+'|'+lat.toFixed(3)+'|'+lon.toFixed(3); if(seen[key])return; seen[key]=1;
+      const bits=[];
+      if(tg.fee==='yes')bits.push('paid'); else if(tg.fee==='no')bits.push('free');
+      if(tg['sanitary_dump_station']==='yes'||tg.sanitary_dump_station==='customers')bits.push('service point');
+      if(tg.power_supply==='yes'||tg.electricity==='yes')bits.push('EHU');
+      if(tg.water==='yes'||tg.drinking_water==='yes')bits.push('water');
+      if(tg.capacity)bits.push(tg.capacity+' pitches');
+      const d=distKm(m.lat,m.lon,lat,lon);
+      out.push({id:'ai-'+el.type[0]+el.id,name:name,lat:lat,lon:lon,meta:(bits.length?bits.join(' · ')+' · ':'')+'~'+d+' km',waze:'https://waze.com/ul?ll='+lat+','+lon+'&navigate=yes',d:d});
+    });
+    out.sort((a,b)=>a.d-b.d);
+    S.aires=S.aires||{}; S.aires[S.region]=out.slice(0,15); save();
+    airing=false; render();
+    const n=document.getElementById('aire-note');
+    if(n)n.textContent=(out.length?(out.length+' aires / camper stops from OpenStreetMap nearby.'):'No aires mapped within 20 km here — try the community Aires map, Park4Night or a local campsite.')+' Community-mapped, so check access and overnight rules before you stop.';
+  }catch(e){
+    airing=false; render();
+    const n=document.getElementById('aire-note');
+    if(n)n.textContent="Couldn\u2019t reach the aires directory — needs a connection. The Aires map link works in a browser when you\u2019re online.";
+  }
+}
+
+/* ===== FERRATA tab (offline guidebook + live conditions) ===== */
+function packraftCard(){
+  let h='<details class="grades" style="margin-top:18px"><summary>Packraft &amp; paddle hire</summary>';
+  h+='<p class="muted">Dedicated packraft hire on the route is rare — packrafts are usually owned, or paddled on guided meetups. The genuine options near the route:</p>';
+  PACKRAFT.forEach(p=>{h+='<div class="shower-row"><div><div class="shower-n">'+p.n+'</div><div class="shower-m">'+p.what+'</div></div><a class="act go" href="https://waze.com/ul?ll='+p.lat+','+p.lon+'&navigate=yes" target="_blank">Navigate</a></div>';});
+  PACKRAFT_LINKS.forEach(p=>{h+='<div class="shower-row"><div><div class="shower-n">'+p.n+'</div><div class="shower-m">'+p.what+'</div></div><a class="act" href="'+p.url+'" target="_blank">Open ↗</a></div>';});
+  h+='<p class="muted" style="margin-top:10px">For on-the-spot paddling, kayak / SUP / canoe hire is easy to find on calm water — Pont du Galetas in the Verdon, Lac de Sainte-Croix, the Italian lakes — while the Durance valley is the place for whitewater.</p></details>';
+  return h;
+}
+function vfDomId(region,i){return region.replace(/[^a-z]/gi,'')+i;}
+function renderFerrata(){
+  let h='<div class="card"><div class="lab">Via ferrata guidebook</div><div class="muted">Offline route notes for the French Alps, Dolomites and Switzerland. Tap <b>Conditions</b> for live weather guidance at the route, or <b>Navigate</b> to drive there.</div></div>';
+  h+='<details class="grades"><summary>Grades explained</summary>'
+    +'<p>Each country uses its own scale. Roughly low to high:</p>'
+    +'<p><b>French (F–ED)</b> — <b>F</b> facile (easy, ladders/cables, little exposure) · <b>PD</b> peu difficile · <b>D</b> difficile (steep, sustained, exposed) · <b>TD</b> très difficile · <b>ED</b> extrême (very steep, athletic, big air).</p>'
+    +'<p><b>Dolomites (1–6 + A–C)</b> — a <b>number</b> for technical difficulty (1 easy → 6 extreme) and a <b>letter</b> for seriousness/commitment (A short and low → C long, high and remote). So <b>2A</b> is an easy outing; <b>5C</b> is a hard, committing mountain day.</p>'
+    +'<p><b>German / Swiss (K1–K6)</b> — <b>K1</b> easy → <b>K6</b> extreme, the most widely used Klettersteig scale (you\u2019ll also see A–F meaning the same).</p>'
+    +'<p><b>Rough cross-read:</b> F ≈ 1–2 ≈ K1–K2 · PD ≈ 2–3 ≈ K2–K3 · D ≈ 3–4 ≈ K3–K4 · TD ≈ 4–5 ≈ K4–K5 · ED ≈ 5–6 ≈ K5–K6. Treat it as a guide, not a promise — exposure, length and altitude change how hard a route feels.</p>'
+    +'<p class="muted">A proper via ferrata set (harness, lanyard with shock absorber, helmet) and dry conditions are non-negotiable on anything above the easiest routes.</p></details>';
+  Object.keys(FERRATA).forEach(region=>{
+    h+='<div class="lab2">'+region+'</div>';
+    h+='<div class="muted" style="margin:-4px 0 8px">'+FERRATA_SCALE[region]+'</div>';
+    FERRATA[region].forEach((f,i)=>{
+      const id=vfDomId(region,i);
+      h+='<div class="vf"><div class="vf-top"><span class="vf-n">'+f.n+'</span><span class="vf-g">'+f.g+'</span></div>';
+      h+='<div class="vf-meta">'+[f.v,f.t,f.s].filter(Boolean).join('  ·  ')+'</div>';
+      h+='<div class="why">'+f.note+'</div>';
+      h+='<div class="acts"><a class="act go" href="https://waze.com/ul?ll='+f.lat+','+f.lon+'&navigate=yes" target="_blank">Navigate</a>'
+        +'<button class="act" data-vf="'+id+'">Conditions</button>'
+        +'<a class="act" href="https://www.google.com/search?q='+encodeURIComponent(f.n+' '+(region==='Switzerland'?'klettersteig':'via ferrata')+' topo')+'" target="_blank">Topo ↗</a>'
+        +(f.cond?'<a class="act" href="'+f.cond+'" target="_blank">Official status ↗</a>':'')
+        +'<a class="act" href="https://www.google.com/search?q='+encodeURIComponent(f.n+' via ferrata conditions')+'" target="_blank">Reports ↗</a></div>';
+      h+='<div class="vf-cond" id="cond-'+id+'"></div></div>';
+    });
+  });
+  A.innerHTML=h;
+}
+function vfByDomId(id){let found=null;Object.keys(FERRATA).forEach(region=>{FERRATA[region].forEach((f,i)=>{if(vfDomId(region,i)===id)found=f;});});return found;}
+async function ferrataConditions(id){
+  const f=vfByDomId(id); const box=document.getElementById('cond-'+id); if(!f||!box)return;
+  box.innerHTML='<div class="muted">Checking weather at the route…</div>';
+  try{
+    const u='https://api.open-meteo.com/v1/forecast?latitude='+f.lat+'&longitude='+f.lon+'&current=temperature_2m,precipitation,weather_code,wind_speed_10m&hourly=freezing_level_height&daily=precipitation_sum,weather_code,wind_speed_10m_max&forecast_days=1&timezone=auto';
+    const j=await fetchJSON(u);
+    const cur=j.current||{}, day=j.daily||{};
+    const code=cur.weather_code, dcode=(day.weather_code||[])[0];
+    const storm=[95,96,99].includes(code)||[95,96,99].includes(dcode);
+    const precipDay=(day.precipitation_sum||[])[0]||0;
+    const wet=(cur.precipitation||0)>0||precipDay>=1||code>=51;
+    const windMax=Math.round((day.wind_speed_10m_max||[])[0]||cur.wind_speed_10m||0);
+    const fl=Math.round(((j.hourly&&j.hourly.freezing_level_height)||[])[0]||0);
+    let verdict,cls;
+    if(storm){verdict='Thunderstorm risk today — do not be on the cables. Postpone.';cls='vf-bad';}
+    else if(wet){verdict='Wet — rock and cables slippery, high fall risk. Better another day.';cls='vf-bad';}
+    else if(windMax>=45){verdict='Windy ('+windMax+' km/h) — exposed sections will be unpleasant; consider postponing.';cls='vf-warn';}
+    else{verdict='Weather looks workable. Still confirm the rock is dry and no afternoon storms before you commit.';cls='vf-ok';}
+    box.innerHTML='<div class="vf-verdict '+cls+'">'+verdict+'</div>'
+      +'<div class="vf-wx">'+Math.round(cur.temperature_2m)+'°C now · wind to '+windMax+' km/h · rain today '+precipDay.toFixed(1)+' mm · freezing level ~'+fl+' m</div>'
+      +'<div class="muted" style="margin-top:6px">Weather-based guidance only — not an open/closed status. Check seasonal closures and recent snow locally'+(f.cond?' (official page linked above)':'')+'.</div>';
+  }catch(e){
+    box.innerHTML='<div class="vf-verdict vf-bad">Couldn\u2019t reach the weather service — needs a connection. Use the Reports link or check locally.</div>';
+  }
+}
+
+/* ===== ROUTE (countries + departure + weather grid + currency) ===== */
+function countdownText(){
+  if(!depDate)return '';
+  const t=new Date(depDate+'T00:00:00'); const now=new Date(); now.setHours(0,0,0,0);
+  const d=Math.round((t-now)/86400000);
+  if(d>0)return d+' day'+(d===1?'':'s')+' to go';
+  if(d===0)return 'Departing today';
+  return Math.abs(d)+' day'+(Math.abs(d)===1?'':'s')+' into the trip';
+}
+function updateHeader(){
+  const base='UK → FR → CH → IT → home';
+  const cd=countdownText();
+  document.getElementById('subhead').innerHTML=cd?(base+' · <b>'+cd+'</b>'):base;
+}
+/* ===== events (engine; Route/Spots/Prep wire their own) ===== */
+document.addEventListener('click',e=>{
+  const t=e.target;
+  const tb=t.closest&&t.closest('.tab'); if(tb){setTab(tb.getAttribute('data-tab'));return;}
+  const g=t.closest&&t.closest('#geo'); if(g){useGeo();return;}
+  const dc=t.closest&&t.closest('#discover'); if(dc){doDiscover();return;}
+  const sh=t.closest&&t.closest('#showers'); if(sh){doShowers();return;}
+  const ai=t.closest&&t.closest('#aires'); if(ai){doAires();return;}
+  let a;
+  if((a=t.closest&&t.closest('[data-vf]'))){ferrataConditions(a.getAttribute('data-vf'));return;}
+  if((a=t.closest&&t.closest('[data-wx]'))){const v=a.getAttribute('data-wx');if(v==='hot'){S.manualHot=!S.manualHot;}else{S.manualWet=(v==='wet');}save();render();return;}
+  if((a=t.closest&&t.closest('[data-you]'))){S.you=+a.getAttribute('data-you');save();render();return;}
+  if((a=t.closest&&t.closest('[data-reb]'))){S.reb=+a.getAttribute('data-reb');save();render();return;}
+  if((a=t.closest&&t.closest('[data-load]'))){S.load=a.getAttribute('data-load');save();render();return;}
+  if((a=t.closest&&t.closest('[data-f]'))){S.filter=a.getAttribute('data-f');save();render();return;}
+  if(t.id==='reset'){if(confirm('Reset cached weather, finds and settings?')){localStorage.removeItem(KEY);location.reload();}return;}
+});
+document.addEventListener('change',e=>{if(e.target.id==='regsel'){S.region=e.target.value;S.wx=null;save();render();loadWx();}});
+
+let wxFailed=false;
+function loadWx(){const m=regionMeta(S.region);if(!m||m.lat==null)return;fetchWx(m).then(w=>{if(w){S.wx=w;wxFailed=false;}else{wxFailed=true;}save();if(S.tab==='now')render();});}
+let geoBusy=false, geoMsg='';
+function useGeo(){
+  if(geoBusy)return;
+  if(!navigator.geolocation){geoMsg='This browser has no location support — pick your region from the list.';render();return;}
+  if(window.isSecureContext===false){geoMsg='Location only works on the hosted (https) version — pick your region from the list for now.';render();return;}
+  geoBusy=true; geoMsg='Locating…'; render();
+  navigator.geolocation.getCurrentPosition(function(p){
+    let best=REGIONS[0],bd=1e9;
+    REGIONS.forEach(function(r){if(r.lat==null)return;const d=Math.hypot(r.lat-p.coords.latitude,r.lon-p.coords.longitude);if(d<bd){bd=d;best=r;}});
+    geoBusy=false; geoMsg='Nearest region set: '+best.name;
+    S.region=best.name; S.wx=null; save(); render(); loadWx();
+  },function(err){
+    geoBusy=false;
+    geoMsg = (err&&err.code===1) ? 'Location permission was denied — allow it for this site in your browser, or pick your region from the list.'
+           : (err&&err.code===3) ? 'Location timed out — try again, or pick your region from the list.'
+           : 'Couldn\u2019t get a location fix — pick your region from the list.';
+    render();
+  },{enableHighAccuracy:true,timeout:10000,maximumAge:60000});
+}
+
+/* ===== init ===== */
+function maybeHostBanner(){
+  const insecure=(location.protocol==='file:')||(location.origin==='null')||(window.isSecureContext===false);
+  const wrap=document.getElementById('hostwrap'); if(!wrap)return;
+  if(!insecure||loadValue('van-host-dismiss',false)){wrap.innerHTML='';return;}
+  wrap.innerHTML='<div class="hostbanner"><div><b>Live features need hosting.</b> Opened straight from a file, the browser blocks the map tiles, live weather and gem search. Drop this folder on Netlify or GitHub Pages (https) and they work. Your planned spots and suggestions still show without them.</div><button id="host-x" aria-label="Dismiss">×</button></div>';
+  const x=document.getElementById('host-x'); if(x)x.addEventListener('click',()=>{saveValue('van-host-dismiss',true);wrap.innerHTML='';});
+}
+maybeHostBanner();
+updateHeader();
+render();
+loadWx();
+</script>
+<script>
+/* PWA: register service worker + install button */
+if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){});});}
+(function(){
+  var dp=null, ib=document.getElementById('install');
+  window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();dp=e;if(ib)ib.hidden=false;});
+  if(ib)ib.addEventListener('click',function(){if(!dp)return;dp.prompt();dp.userChoice.then(function(){dp=null;ib.hidden=true;});});
+  window.addEventListener('appinstalled',function(){if(ib)ib.hidden=true;});
+})();
+</script>
+</body></html>
