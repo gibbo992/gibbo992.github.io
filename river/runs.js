@@ -8,11 +8,19 @@
    paddlers actually use — scrape, low, medium, high, very high, huge — under
    CC-BY-SA. That is knowledge no amount of statistics recovers.
 
-   This screen shows observed level against those levels. It does NOT forecast
-   them: Scotland publishes stage, not flow, and the model needs a different
-   calibration path to work in stage. That is the next piece of work, and until
-   it exists this screen says plainly that it is showing you a reading rather
-   than a prediction.
+   Two open catalogues are merged here:
+
+     Where's the Water  (Scottish Canoe Association, CC-BY-SA)  122 sections
+     Rainchasers        (Rob Tuley, MIT)                        114 sections
+
+   The Rainchasers records carry Environment Agency RLOI gauge ids, resolved at
+   build time to hydrology stations — so 53 English and Welsh runs sit on gauges
+   with a flow record and a catchment area, which means the full forecast model
+   runs on them and can answer "will it be in, on Saturday" against the levels
+   paddlers actually use.
+
+   Scottish runs show observed level only. SEPA publishes stage, not flow, and
+   the model needs a different calibration path to work in stage.
    ========================================================================== */
 (function (root) {
   'use strict';
@@ -35,19 +43,43 @@
     });
   }
 
-  /* Current level for every run, in one round trip. */
+  /* Current level for every run: one bulk call per network, not one per river.
+     SEPA takes many timeseries ids in a query; the EA publishes every latest
+     level reading in the country as a single document. */
   function refresh(force) {
     if (!force && state.fetchedAt && Date.now() - state.fetchedAt < 5 * 60000) {
       return Promise.resolve(state.levels);
     }
     return load().then(function (secs) {
-      var ids = [];
-      secs.forEach(function (s) { if (ids.indexOf(s.tsId) < 0) ids.push(s.tsId); });
-      return D.sepaLatest(ids).then(function (m) {
-        state.levels = m; state.fetchedAt = Date.now();
-        return m;
+      var tsIds = [], eaRefs = {};
+      secs.forEach(function (s) {
+        var g = s.gauge || {};
+        if (g.kind === 'sepa' && g.tsId && tsIds.indexOf(g.tsId) < 0) tsIds.push(g.tsId);
+        if (g.kind === 'ea' && g.eaRef) eaRefs[g.eaRef] = 1;
+      });
+      return Promise.all([
+        tsIds.length ? D.sepaLatest(tsIds).catch(function () { return {}; }) : {},
+        Object.keys(eaRefs).length ? D.eaLatestLevels(eaRefs).catch(function () { return {}; }) : {}
+      ]).then(function (r) {
+        var out = {};
+        Object.keys(r[0]).forEach(function (k) { out['sepa:' + k] = r[0][k]; });
+        Object.keys(r[1]).forEach(function (k) { out['ea:' + k] = r[1][k]; });
+        state.levels = out; state.fetchedAt = Date.now();
+        return out;
       });
     });
+  }
+
+  function levelKey(s) {
+    var g = s.gauge || {};
+    return g.kind === 'sepa' ? 'sepa:' + g.tsId : 'ea:' + g.eaRef;
+  }
+
+  /* A run can be forecast when its gauge has both a flow record and a published
+     catchment area — everything the rainfall-runoff model needs. */
+  function forecastable(s) {
+    var g = s.gauge || {};
+    return !!(g.kind === 'ea' && g.guid && g.area && g.hasFlow);
   }
 
   /* Which band a reading falls in. Bands are ascending thresholds, so the
@@ -72,9 +104,11 @@
   }
 
   function withLevel(s) {
-    var r = state.levels[s.tsId];
+    var r = state.levels[levelKey(s)];
     var lvl = r ? r.v : null;
-    return { s: s, level: lvl, at: r ? r.t : null, cls: lvl != null ? classify(lvl, s.bands) : null };
+    return { s: s, level: lvl, at: r ? r.t : null,
+             cls: lvl != null ? classify(lvl, s.bands) : null,
+             canForecast: forecastable(s) };
   }
 
   function all() { return (state.sections || []).map(withLevel); }
@@ -86,7 +120,7 @@
 
   root.RiverRuns = {
     load: load, refresh: refresh, all: all, bySlug: bySlug,
-    classify: classify, fraction: fraction,
+    classify: classify, fraction: fraction, forecastable: forecastable,
     CAT: CAT, CAT_LABEL: CAT_LABEL,
     meta: function () { return state.meta; },
     fetchedAt: function () { return state.fetchedAt; }

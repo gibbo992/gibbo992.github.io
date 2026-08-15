@@ -427,6 +427,27 @@
       });
   }
 
+  /* Every latest level reading in England and Wales in one document. It is
+     about 1.3 MB and takes a couple of seconds, which beats 114 round trips
+     from a phone on a riverbank by a wide margin. Filtered against the station
+     references we actually care about. */
+  function eaLatestLevels(wanted) {
+    return getJSON(EA_FLD + '/data/readings?latest&parameter=level&_limit=10000', 60000)
+      .then(function (d) {
+        var out = {};
+        (d.items || []).forEach(function (it) {
+          if (typeof it.value !== 'number') return;
+          var mid = String(it.measure && (it.measure['@id'] || it.measure) || '').split('/').pop();
+          var ref = mid.split('-')[0];
+          if (!ref || (wanted && !wanted[ref])) return;
+          /* prefer plain stage over downstream-stage and other qualifiers */
+          if (out[ref] && /downstage|groundwater/i.test(mid)) return;
+          out[ref] = { t: it.dateTime, v: it.value };
+        });
+        return out;
+      });
+  }
+
   root.RiverData = {
     getJSON: getJSON, iso: iso, daysAgo: daysAgo, haversine: haversine,
     searchStations: searchStations, stationByGuid: stationByGuid,
@@ -436,6 +457,7 @@
     historicForcing: historicForcing,
     liveForcing: liveForcing, forecastForcing: forecastForcing,
     kiwis: kiwis, sepaLatest: sepaLatest, sepaSeries: sepaSeries,
+    eaLatestLevels: eaLatestLevels,
     ensembleRain: ensembleRain
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.RiverData;

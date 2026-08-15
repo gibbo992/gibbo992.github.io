@@ -187,38 +187,57 @@ but replays with rainfall known. The live archive is small and slow to accumulat
 is the only thing that pays for the rain forecast being wrong. Neither substitutes for the
 other, so the app shows both, labelled.
 
-## Named runs (Scotland)
+## Named runs
 
-The rest of this app derives "runnable" from a gauge's own flow duration curve, because
-for most rivers nobody has written down what good water actually is. For Scotland somebody
-has. The Scottish Canoe Association's [Where's the Water](https://github.com/jriddell/wheres-the-water)
-publishes 122 sections under CC-BY-SA 4.0 with the levels paddlers actually use — scrape,
-low, medium, high, very high, huge — plus grades, put-in and take-out, guidebook links, and
-free-text notes.
+The rest of this app derives "runnable" from a gauge's own flow duration curve, because for
+most rivers nobody has written down what good water actually is. Two open catalogues have:
 
-That is knowledge no amount of statistics recovers, and it is properly open. It is vendored
-into `sections.json` (52 KB, 108 of 122 with usable bands) and shown against live SEPA
-readings. SEPA's KiWIS endpoint is open, CORS-enabled, reaches back to 1997, and takes many
-timeseries ids per request — the current level of all 122 runs costs one round trip, about
-a second.
+| Source | Licence | Sections | Gauges |
+|---|---|---|---|
+| [Where's the Water](https://github.com/jriddell/wheres-the-water) (Scottish Canoe Association) | CC-BY-SA 4.0 | 122 | SEPA |
+| [Rainchasers](https://github.com/robtuley/rainchasers) (Rob Tuley) | MIT | 114 | EA (RLOI) |
 
-Two things worth noting about how the data is handled:
+Both carry the levels paddlers actually use — scrape, low, medium, high, very high, huge —
+plus grades, put-in and take-out and descriptions. That is knowledge no amount of statistics
+recovers, and it is properly open.
 
-- The SCA notes contain author-written HTML. It is stripped to text at build time rather
+**236 runs in `sections.json`** (160 KB, 222 with usable bands). The Rainchasers records
+carry Environment Agency RLOI gauge ids, resolved at build time to hydrology stations, so
+the phone ships a static file and does no joining.
+
+### 53 runs are fully forecastable
+
+Where the resolved gauge has both a flow record and a published catchment area, the whole
+model runs on it. Tap **Forecast this run** and the five-day ensemble forecast is scored
+against that section's own paddler levels rather than a flow percentile: the thresholds are
+in metres, so they are converted to flow through the rating curve fitted for that gauge.
+That conversion is the reason the model predicts flow and converts at the end rather than
+predicting stage directly.
+
+For the Tees at Cotherstone, medium (0.70 m) becomes 10.6 m³/s and huge (1.80 m) becomes
+115 m³/s — against a gauge whose Q20 is 10.3 m³/s, so "medium" starts right about the
+wettest fifth of days, which is what a grade 2 run wanting decent water should look like.
+
+The rest show live level against the bands but no forecast: Scottish gauges because SEPA
+publishes stage rather than flow, and some English ones because the gauge has no flow record
+or catchment area.
+
+### Handling notes
+
+- Both catalogues carry author-written HTML. It is stripped to text at build time rather
   than injected into the page.
-- 14 sections carry notes about trees, wires, weirs or sewage releases. Those matter more
-  than the level does, so they are surfaced as a banner rather than a footnote.
+- 11 sections carry notes about trees, wires, weirs or sewage releases; those get a banner
+  rather than a footnote. Hazard detection runs only on the SCA notes field, which is a
+  hazard-reporting field — an earlier version also ran it over Rainchasers' *directions*,
+  and cheerfully labelled "take out above the big weir" as a reported hazard.
 
-**These are observed levels, not forecasts.** Scotland publishes stage, not flow, and the
-model needs a different calibration path to predict it — see below.
-
-### Why Scotland can't just use the existing model
+### Why Scotland still can't be forecast
 
 The model works in flow, where mass balance is additive, and converts to metres through a
 rating fitted from paired EA level/flow records. SEPA has no flow record to fit against, and
 publishes no catchment areas. Forecasting Scottish runs needs a second calibration path:
 absorb catchment area into a scale parameter and fit a monotone stage-discharge transform
-jointly during calibration, scoring KGE on stage. That is the next piece of work.
+jointly during calibration, scoring KGE on stage.
 
 ## Model structure
 
