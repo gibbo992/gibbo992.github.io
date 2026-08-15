@@ -1,0 +1,167 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<meta name="theme-color" content="#0b1a24"/>
+<link rel="manifest" href="manifest.webmanifest"/>
+<link rel="icon" href="icon-192.png" type="image/png"/>
+<link rel="apple-touch-icon" href="apple-touch-icon.png"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Riverwise"/>
+<meta name="description" content="Probabilistic UK river level forecasts, calibrated per gauge, computed on your phone."/>
+<title>Riverwise</title>
+<style>
+:root{
+  --shell:#0b1a24; --shell-soft:#8ea6b4; --shell-line:#1d3543;
+  --canvas:#eef3f5; --card:#ffffff; --paper:#f2f6f8;
+  --ink:#0d1b24; --sub:#5f7382; --line:#dde5ea; --grid:#e8eef1;
+  --accent:#0d7d8f; --accent-ink:#075866; --accent-tint:#e2f2f4;
+  --good:#12866b; --warn:#c07816; --bad:#c0442a;
+  --band:rgba(13,125,143,.10); --now:#c0442a;
+  --r:15px; --shadow:0 1px 2px rgba(13,27,36,.05),0 8px 20px rgba(13,27,36,.06);
+  --sans:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,Segoe UI,Roboto,sans-serif;
+  --mono:ui-monospace,'SF Mono',Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --canvas:#0d1519; --card:#141f26; --paper:#18242b;
+    --ink:#e7eef2; --sub:#93a7b3; --line:#243239; --grid:#202d34;
+    --accent:#3fb6c8; --accent-ink:#7fd4e2; --accent-tint:#16323a;
+    --band:rgba(63,182,200,.13); --now:#e8734f;
+    --good:#3fbd97; --warn:#e0a049; --bad:#e8734f;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 20px rgba(0,0,0,.25);
+  }
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--canvas);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+body{padding-bottom:82px}
+button,input{font-family:inherit}
+
+.head{background:var(--shell);color:#fff;padding:calc(env(safe-area-inset-top) + 12px) 16px 12px;position:sticky;top:0;z-index:50}
+.headrow{display:flex;align-items:center;justify-content:space-between;gap:10px;max-width:640px;margin:0 auto}
+.brand{font-size:17px;font-weight:700;letter-spacing:-.3px;line-height:1.05}
+.brand small{display:block;font-size:9px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;color:var(--shell-soft);margin-top:3px}
+.installbtn{font-size:11px;font-weight:700;border:1px solid var(--shell-line);color:#fff;background:rgba(255,255,255,.08);border-radius:9px;padding:7px 12px}
+
+.wrap{max-width:640px;margin:0 auto;padding:0 14px 30px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:15px;margin-top:13px;box-shadow:var(--shadow)}
+.card.small p{margin:0 0 7px}
+.lab{font-size:10.5px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--sub);margin:0 0 10px}
+.lab2{font-size:12px;font-weight:800;letter-spacing:.4px;margin:22px 0 2px;display:flex;align-items:center;gap:8px}
+.lab2:before{content:'';width:13px;height:2px;border-radius:2px;background:var(--accent)}
+.muted{font-size:12.8px;color:var(--sub);line-height:1.5;margin:6px 0 0}
+.muted.warn{color:var(--warn)}
+.err b{color:var(--bad)}
+
+.head-card .riv{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--accent)}
+.head-card .stn{font-size:21px;font-weight:700;letter-spacing:-.4px;margin-top:2px}
+.head-card .meta{font-size:12px;color:var(--sub);margin-top:3px;font-family:var(--mono)}
+
+.acts{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}
+.btn{font-size:12.5px;font-weight:650;border-radius:9px;padding:9px 13px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+.btn.go{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.on{border-color:var(--accent);color:var(--accent-ink)}
+
+.verdict .vrow{display:flex;align-items:flex-start;gap:12px}
+.verdict .big{font-size:34px;font-weight:700;letter-spacing:-1.2px;line-height:1.05;margin-top:2px}
+.verdict .sub{font-size:12.5px;color:var(--sub);margin-top:3px;font-family:var(--mono)}
+.badge{margin-left:auto;font-size:11px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;padding:6px 12px;border-radius:999px;background:var(--accent-tint);color:var(--accent-ink);white-space:nowrap}
+.badge.low{background:#efe6d4;color:#8a6520}
+.badge.good{background:var(--accent-tint);color:var(--accent-ink)}
+.badge.warn{background:#f6e6d2;color:#a2670f}
+.badge.bad{background:#f7dcd5;color:#9c3419}
+@media (prefers-color-scheme: dark){
+  .badge.low{background:#3a3020;color:#e5c07b}
+  .badge.warn{background:#3d2e1a;color:#e5b06b}
+  .badge.bad{background:#3d201a;color:#f0937a}
+}
+.peak{margin-top:11px;padding:11px 12px;border-radius:10px;background:var(--paper);border-left:3px solid var(--accent);font-size:13.5px;line-height:1.5}
+.why{margin-top:10px;font-size:12.5px;color:var(--sub);line-height:1.55}
+
+canvas{width:100%;display:block;margin-top:2px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:11px;color:var(--sub);margin-top:8px;align-items:center}
+.legend .k{width:13px;height:3px;border-radius:2px;display:inline-block;margin-right:5px}
+.legend .k.obs{background:var(--ink)}
+.legend .k.med{background:var(--accent)}
+.legend .k.fan{background:var(--accent);opacity:.3;height:9px}
+.legend .k.bandk{background:var(--band);height:9px;border:1px solid var(--line)}
+
+.win{display:flex;align-items:center;gap:12px;margin-bottom:4px}
+.win .wt{font-size:19px;font-weight:700;letter-spacing:-.3px}
+.win .wp{margin-left:auto;font-size:25px;font-weight:700;color:var(--accent);letter-spacing:-1px}
+.strip{display:flex;gap:6px;margin-top:14px}
+.sday{flex:1;text-align:center}
+.sday .sn{font-size:10.5px;font-weight:700;color:var(--sub);text-transform:uppercase;letter-spacing:.5px}
+.sbar{height:52px;background:var(--paper);border-radius:6px;margin:5px 0 4px;display:flex;align-items:flex-end;overflow:hidden}
+.sbar>i{display:block;width:100%;background:var(--accent);border-radius:5px 5px 0 0;min-height:2px}
+.sday .sv{font-size:11px;font-weight:700;font-family:var(--mono)}
+
+.bandrow{display:flex;align-items:center;gap:10px;margin-top:10px}
+.bandrow label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--sub);width:52px}
+.bandrow input{flex:1;accent-color:var(--accent)}
+.bandrow span{font-family:var(--mono);font-size:12px;width:76px;text-align:right}
+.fdc{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:14px}
+.fcell{background:var(--paper);border-radius:8px;padding:8px 4px;text-align:center}
+.fcell .fk{font-size:10px;font-weight:700;color:var(--sub);font-family:var(--mono)}
+.fcell .fv{font-size:11.5px;font-weight:700;margin:2px 0 1px}
+.fcell .fn{font-size:9.5px;color:var(--sub)}
+
+table.verif{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:4px}
+table.verif th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:var(--sub);padding:0 0 6px;font-weight:700}
+table.verif td{padding:5px 0;border-top:1px solid var(--line);font-family:var(--mono)}
+table.verif td.good{color:var(--good);font-weight:700}
+table.verif td.bad{color:var(--bad);font-weight:700}
+
+.srow{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 13px;margin-top:8px;box-shadow:var(--shadow)}
+.srow .sn2{font-size:14.5px;font-weight:650}
+.srow .sm{font-size:11.5px;color:var(--sub);margin-top:2px;font-family:var(--mono)}
+.sinfo{flex:1;min-width:0}
+.stag{font-size:9.5px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;padding:4px 8px;border-radius:999px;white-space:nowrap}
+.stag.ok{background:var(--accent-tint);color:var(--accent-ink)}
+.stag.part{background:var(--paper);color:var(--sub)}
+
+.inp{width:100%;border:1px solid var(--line);border-radius:11px;padding:12px;font-size:16px;background:var(--card);color:var(--ink)}
+
+.pts{margin:8px 0 0;padding-left:18px}
+.pts li{font-size:13px;line-height:1.55;color:var(--sub);margin-bottom:8px}
+.pts li b{color:var(--ink)}
+
+.pars{display:flex;flex-direction:column;gap:15px}
+.par .ph{display:flex;justify-content:space-between;font-size:13px}
+.par .ph span{font-family:var(--mono);color:var(--accent-ink);font-weight:700}
+.ptrack{height:4px;background:var(--paper);border-radius:999px;margin:6px 0 5px;position:relative}
+.ptrack>i{position:absolute;top:-3px;width:10px;height:10px;border-radius:50%;background:var(--accent)}
+.par .pn{font-size:11.5px;color:var(--sub);line-height:1.45}
+.verdict-line{font-size:13px;font-weight:650;margin:12px 0 4px;padding:9px 11px;border-radius:9px;background:var(--paper);border-left:3px solid var(--sub)}
+.verdict-line.good{border-left-color:var(--good);color:var(--good)}
+.verdict-line.ok{border-left-color:var(--warn);color:var(--warn)}
+.verdict-line.bad{border-left-color:var(--bad);color:var(--bad)}
+
+.spin{width:20px;height:20px;border:2.5px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:sp .8s linear infinite;margin-bottom:9px}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:50;display:flex;background:var(--shell);padding:8px 12px calc(env(safe-area-inset-bottom) + 9px);border-top:1px solid var(--shell-line)}
+.tab{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;background:none;border:none;color:var(--shell-soft);padding:5px 4px;font-size:10.5px;font-weight:650;border-radius:11px}
+.tab svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.tab.on{color:#fff;background:rgba(255,255,255,.08)}
+.tab.on svg{stroke:var(--accent)}
+</style>
+</head><body>
+
+<div class="head"><div class="headrow">
+  <div class="brand">Riverwise<small>UK river forecasts</small></div>
+  <button id="install" class="installbtn" hidden>Install</button>
+</div></div>
+
+<div class="wrap"><div id="app"></div></div>
+
+<div class="tabs">
+  <button class="tab on" data-tab="now"><svg viewBox="0 0 24 24"><path d="M3 15c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/><path d="M3 9c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/></svg><span>Forecast</span></button>
+  <button class="tab" data-tab="pick"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><span>Rivers</span></button>
+  <button class="tab" data-tab="model"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16"/><path d="M7 15l4-5 3 3 5-7"/></svg><span>Model</span></button>
+</div>
+
+<script src="model.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body></html>
