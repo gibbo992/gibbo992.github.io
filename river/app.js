@@ -60,6 +60,10 @@
     try {
       var r = await buildForecast(st, setStatus);
       S.result = r;
+      window.__last = r;               /* debug handle for the browser tests */
+      /* Write this forecast down before showing it, so it can be scored against
+         what the river actually does. Best effort — never block the view. */
+      try { await RiverArchive.record(r); } catch (e2) {}
     } catch (e) {
       S.error = String(e && e.message || e);
     }
@@ -175,6 +179,23 @@
 
     var fc = M.ensemble(members, par, st.area, 1, da.state, verif ? verif.sigma : null);
 
+    /* ---- 9b. score past forecasts, and let them widen or narrow this one -- */
+    status('Scoring past forecasts…');
+    var arch = null, spreadFactor = 1;
+    try {
+      await RiverArchive.verifyAll(st.guid, obsSeries);
+      arch = await RiverArchive.stats(st.guid);
+      /* Once enough real forecasts have matured, the measured coverage of the
+         stated 80% band overrides the modelled spread. An ensemble that turns
+         out to have been too confident gets widened by exactly the factor the
+         record says it was short by — the one place where writing forecasts
+         down actually changes what the app tells you next. */
+      if (arch && arch.n >= 12 && arch.spreadFactor && Math.abs(arch.spreadFactor - 1) > 0.05) {
+        spreadFactor = arch.spreadFactor;
+        rescaleSpread(fc, spreadFactor);
+      }
+    } catch (e) { /* archive unavailable (private browsing, quota) — carry on */ }
+
     /* ---- 10. bands from this river's own flow duration curve ------------- */
     var stats = M.flowStats(daily.map(function (x) { return x.v; }));
     var band = S.band[st.guid] || defaultBand(stats);
@@ -192,8 +213,21 @@
       nMembers: members.length, nPts: hist.nPts,
       pastTime: live.time.slice(0, nowIdx + 1), pastQ: spin.q,
       rainPast: live.p.slice(0, nowIdx + 1), rainFc: live.p.slice(nowIdx + 1),
+      arch: arch, spreadFactor: spreadFactor,
       builtAt: Date.now()
     };
+  }
+
+  /* Widen (or tighten) the quantiles about the median in log space. */
+  function rescaleSpread(fc, k) {
+    for (var i = 0; i < fc.p50.length; i++) {
+      var m = fc.p50[i];
+      if (!(m > 0)) continue;
+      ['p10', 'p25', 'p75', 'p90'].forEach(function (q) {
+        var v = fc[q][i];
+        if (v > 0) fc[q][i] = m * Math.pow(v / m, k);
+      });
+    }
   }
 
   function runCalibration(forcing, obs, windows, area, status) {
@@ -369,6 +403,7 @@
     h += chartCard(r);
     h += windowCard(r);
     h += bandCard(r);
+    h += recordCard(r);
     h += trustCard(r);
     h += footerCard(r);
     A.innerHTML = h;
@@ -544,9 +579,59 @@
     return ex > 95 ? s.q95 : s.max;
   }
 
+  /* --------------------------------------------------------------------------
+     TRACK RECORD
+
+     The hindcast card below measures the model. This one measures the app: the
+     forecasts it actually showed, scored against what the river then did. It is
+     the only number here that has paid for the rainfall forecast being wrong,
+     so it is the honest one — and it is always the worse of the two.
+     ------------------------------------------------------------------------ */
+  function recordCard(r) {
+    var a = r.arch;
+    var h = '<div class="card"><div class="lab">Its actual track record here</div>';
+    if (!a || !a.n) {
+      h += '<p class="muted">Every forecast this app shows you is written down and scored later against what the river actually did — including the days the rain forecast was wrong, which the hindcast below quietly gets for free.</p>'
+        + '<p class="muted">' + (a && a.pending
+            ? a.pending + ' forecast' + (a.pending === 1 ? '' : 's') + ' recorded here, none matured yet. Scores appear once the first one has run its full five days.'
+            : 'Nothing scored yet — this is the first forecast recorded for this gauge. Open it again over the coming week and the record builds itself.') + '</p>';
+      return h + '</div>';
+    }
+    var days = Math.max(1, Math.round((Date.now() - a.oldest) / 86400000));
+    var rows = [6, 24, 48, 72].filter(function (L) { return L <= a.mae.length && a.counts[L - 1] > 0; });
+    h += '<table class="verif"><tr><th>Lead</th><th>Forecast</th><th>“No change”</th><th>Beats it by</th><th>In band</th></tr>';
+    rows.forEach(function (L) {
+      var sk = a.skill[L - 1];
+      var cell = sk < -1 ? 'much worse' : (sk >= 0 ? '+' : '') + Math.round(sk * 100) + '%';
+      h += '<tr><td>' + L + ' h</td><td>' + a.mae[L - 1].toFixed(2) + '</td><td>' + a.per[L - 1].toFixed(2) + '</td>'
+        + '<td class="' + (sk > 0.05 ? 'good' : sk < -0.05 ? 'bad' : '') + '">' + cell + '</td>'
+        + '<td>' + Math.round(a.cov[L - 1] * 100) + '%</td></tr>';
+    });
+    h += '</table>';
+    h += '<p class="muted">' + a.n + ' matured forecast' + (a.n === 1 ? '' : 's') + ' over ' + days + ' day' + (days === 1 ? '' : 's')
+      + (a.pending ? ', ' + a.pending + ' still running' : '') + '. Error in ' + (r.kind === 'flow' ? 'm³/s' : 'm') + '. '
+      + '“In band” is how often the outcome landed inside the shaded 80% range — it should read about 80%.</p>';
+
+    if (a.coverage != null) {
+      var pct = Math.round(a.coverage * 100);
+      var adj = r.spreadFactor && Math.abs(r.spreadFactor - 1) > 0.05;
+      h += '<p class="verdict-line ' + (Math.abs(pct - 80) <= 8 ? 'good' : 'ok') + '">'
+        + (Math.abs(pct - 80) <= 8
+            ? 'The 80% band has been right about ' + pct + '% of the time. Honest width.'
+            : pct < 80
+              ? 'The 80% band only caught ' + pct + '% of outcomes — this app has been overconfident here'
+                + (adj ? ', so the range above has been widened by ' + r.spreadFactor.toFixed(2) + '× to match.' : '.')
+              : 'The 80% band caught ' + pct + '% of outcomes — wider than it needed to be'
+                + (adj ? ', so the range above has been tightened by ' + r.spreadFactor.toFixed(2) + '×.' : '.'))
+        + '</p>';
+    }
+    h += '<div class="acts"><button class="btn" data-act="export">Export the record</button></div>';
+    return h + '</div>';
+  }
+
   function trustCard(r) {
     var v = r.verif;
-    var h = '<div class="card"><div class="lab">How much to trust this</div>';
+    var h = '<div class="card"><div class="lab">The model, with rainfall known</div>';
     if (!v || !v.nOrigins) {
       h += '<p class="muted">Not enough recent 15-minute readings at this gauge to score the model honestly. The fit to the two-year record scored KGE '
         + (r.fit && isFinite(r.fit.kge) ? r.fit.kge.toFixed(2) : '—') + '.</p>';
@@ -799,6 +884,7 @@
     else if (act === 'search') doSearch();
     else if (act === 'near') doNear();
     else if (act === 'refresh' && S.station) openStation(S.station);
+    else if (act === 'export') doExport(b);
     else if (act === 'fav' && S.station) {
       if (isFav(S.station.guid)) S.favs = S.favs.filter(function (f) { return f.guid !== S.station.guid; });
       else S.favs = S.favs.concat([S.station]);
@@ -830,6 +916,32 @@
   document.addEventListener('change', function (e) {
     if ((e.target.id === 'blo' || e.target.id === 'bhi') && S.result) render();
   });
+
+  /* Hand the archive over as a file. iOS Safari is fussy about programmatic
+     downloads, so fall back to the share sheet and then to the clipboard —
+     between the three, something always works. */
+  async function doExport(btn) {
+    var json;
+    try { json = await RiverArchive.exportAll(); }
+    catch (e) { btn.textContent = 'Nothing stored'; return; }
+    var name = 'riverwise-forecasts-' + new Date().toISOString().slice(0, 10) + '.json';
+    var file = null;
+    try { file = new File([json], name, { type: 'application/json' }); } catch (e) {}
+    if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: 'Riverwise forecast record' }); return; }
+      catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    try {
+      var url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+      var a = document.createElement('a');
+      a.href = url; a.download = name; document.body.appendChild(a); a.click();
+      setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 4000);
+      btn.textContent = 'Exported';
+      return;
+    } catch (e) {}
+    try { await navigator.clipboard.writeText(json); btn.textContent = 'Copied to clipboard'; }
+    catch (e) { btn.textContent = 'Export unavailable'; }
+  }
 
   async function doSearch() {
     var term = (S.q || '').trim();

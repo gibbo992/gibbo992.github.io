@@ -49,6 +49,47 @@ Then, on every open:
    spread rather than an error bar bolted onto a single line.
 7. **Verifies itself** — a rolling-origin hindcast over the last fortnight at the gauge,
    scored against persistence and climatology, shown in the app.
+8. **Writes the forecast down**, and scores it later against what the river did.
+
+## The forecast archive
+
+Every forecast the app issues is stored in IndexedDB — the 10th/50th/90th percentiles at
+each hourly lead, the gauge reading at issue, and which calibration produced it. On each
+subsequent open, any forecast whose valid times now sit inside the observed window is
+scored against the live 15-minute record, which the app has already fetched, so
+verification costs nothing over the wire.
+
+This matters because it measures a different thing from the hindcast. A hindcast replays
+the model with the rainfall already known; it never pays for the rain forecast being
+wrong, which by day two or three is the dominant error. The archive is the only number in
+the app that has paid for it, and it is always the worse of the two. Both are shown, and
+labelled for what they are.
+
+The loop closes on the **ensemble spread**. Ensembles are typically under-dispersed: the
+stated 80% band contains the outcome rather less than 80% of the time, and no amount of
+hindcasting reveals it. The archive measures the coverage directly and rescales the band
+by the factor the record says it was short by.
+
+That correction is deliberately asymmetric and shrunk toward 1 by sample size:
+
+- Shrinkage `raw^(n/(n+25))` — ten forecasts is a hint, not a measurement.
+- Widening allowed up to 3×; **tightening capped at 0.85×**. A band that turns out too
+  narrow is the failure that puts someone on the water in the wrong conditions. A band
+  that turns out too wide only ever costs a little false caution. The app would rather
+  look uncertain than be wrong quietly.
+- Nothing is applied until at least 12 forecasts have fully matured.
+
+Records are capped at 250 per gauge, one per gauge per hour, a few KB each. **Export the
+record** hands the whole archive over as JSON via the iOS share sheet, so it can come off
+the phone and be analysed or pooled.
+
+### What it does not yet do
+
+The archive is per-device and only covers gauges you actually open, so it cannot feed a
+cross-river recalibration — that needs the exported records pooled somewhere. The obvious
+next uses of a pooled archive: trigger recalibration when bias drifts (a shifted rating,
+a new abstraction), and A/B the model variants against real issued forecasts rather than
+hindcasts.
 
 ## Model structure
 
