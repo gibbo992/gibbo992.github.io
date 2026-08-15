@@ -187,6 +187,28 @@ but replays with rainfall known. The live archive is small and slow to accumulat
 is the only thing that pays for the rain forecast being wrong. Neither substitutes for the
 other, so the app shows both, labelled.
 
+## Design
+
+One scale for type, one for space, one for radius, one semantic colour ramp, defined once
+at the top of `index.html`. Every screen is assembled from six components — surface,
+eyebrow/title/meta, pill, chip, meter, list-row — so the Runs list, the gauge picker and
+the forecast page read as one app rather than three that grew separately.
+
+The **level ramp** (scrape → low → medium → high → very high → huge) is the only
+decorative colour decision in the app. It lives in `runs.js` as a single map and is reused
+by the band pill, the band meter, the map pins and the run detail ladder, so those cannot
+drift apart about what "medium" looks like.
+
+The **band meter** is the signature element: the run's own calibration ladder drawn to
+scale with the reading marked on it. It says more than a percentage does — you can see how
+much more water a run needs to come into condition, and how much would push it out again.
+
+Map pins are teardrops rather than circles. Circles read as data points; a run is a place.
+
+Basemap tiles come from Carto, not OpenStreetMap's own servers, which refuse application
+traffic under their tile usage policy and say so on the tiles themselves. The muted styling
+also lets the coloured pins carry the map instead of competing with a street map.
+
 ## Named runs
 
 The rest of this app derives "runnable" from a gauge's own flow duration curve, because for

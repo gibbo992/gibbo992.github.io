@@ -118,9 +118,39 @@
     return f ? withLevel(f) : null;
   }
 
+  /* Colour per band category — one place, so the list pill, the level bar and
+     the map pins can never disagree about what "medium" looks like. */
+  var CAT_COLOR = {
+    tooLow: '#8c9aa5', scrape: '#b8912f', low: '#d0a03a',
+    medium: '#12866b', high: '#0d7d8f', veryHigh: '#c07816', huge: '#c0442a'
+  };
+  function colorOf(cat) { return CAT_COLOR[cat] || '#8c9aa5'; }
+
+  /* The band ladder as proportional segments, for the level bar. Returns the
+     stops in 0..1 across the full scrape..huge span plus where the reading sits. */
+  function ladder(level, bands) {
+    if (!bands) return null;
+    var keys = CAT.filter(function (k) { return bands[k] != null; });
+    if (keys.length < 2) return null;
+    var lo = bands[keys[0]], hi = bands[keys[keys.length - 1]];
+    if (!(hi > lo)) return null;
+    var span = hi - lo;
+    var segs = [];
+    for (var i = 0; i < keys.length - 1; i++) {
+      segs.push({ cat: keys[i],
+                  from: (bands[keys[i]] - lo) / span,
+                  to: (bands[keys[i + 1]] - lo) / span,
+                  color: colorOf(keys[i]) });
+    }
+    var pos = level != null ? (level - lo) / span : null;
+    return { segs: segs, pos: pos == null ? null : Math.max(-0.04, Math.min(1.04, pos)),
+             lo: lo, hi: hi, loKey: keys[0], hiKey: keys[keys.length - 1] };
+  }
+
   root.RiverRuns = {
     load: load, refresh: refresh, all: all, bySlug: bySlug,
     classify: classify, fraction: fraction, forecastable: forecastable,
+    colorOf: colorOf, ladder: ladder, CAT_COLOR: CAT_COLOR,
     CAT: CAT, CAT_LABEL: CAT_LABEL,
     meta: function () { return state.meta; },
     fetchedAt: function () { return state.fetchedAt; }

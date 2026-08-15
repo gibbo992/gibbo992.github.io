@@ -5,7 +5,11 @@
    the last forecast you loaded rather than an error page. */
 const APP = 'riverwise-v1';
 const API = 'riverwise-api-v1';
+const TILES = 'riverwise-tiles-v1';
+const LEAFLET_CSS = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
+const LEAFLET_JS  = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
 const SHELL = [
+  LEAFLET_CSS, LEAFLET_JS,
   './', './index.html', './manifest.webmanifest',
   './model.js', './data.js', './archive.js', './runs.js', './app.js', './worker.js',
   './sections.json',
@@ -23,12 +27,13 @@ self.addEventListener('install', e => {
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
-      .then(ks => Promise.all(ks.filter(k => ![APP, API].includes(k)).map(k => caches.delete(k))))
+      .then(ks => Promise.all(ks.filter(k => ![APP, API, TILES].includes(k)).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
 
-const isAPI = u => /environment\.data\.gov\.uk|open-meteo\.com/.test(u);
+const isAPI = u => /environment\.data\.gov\.uk|open-meteo\.com|timeseries\.sepa\.org\.uk/.test(u);
+const isTile = u => /basemaps\.cartocdn\.com/.test(u);
 
 async function trim(name, max) {
   const c = await caches.open(name);
@@ -40,6 +45,19 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = req.url;
+
+  /* map tiles: cache-first and capped, so a map you have already looked at
+     still draws on a riverbank with no signal */
+  if (isTile(url)) {
+    e.respondWith(
+      caches.match(req).then(hit => hit || fetch(req).then(res => {
+        const copy = res.clone();
+        caches.open(TILES).then(c => c.put(req, copy)).then(() => trim(TILES, 400));
+        return res;
+      }).catch(() => new Response('', { status: 504 })))
+    );
+    return;
+  }
 
   if (isAPI(url)) {
     e.respondWith(
