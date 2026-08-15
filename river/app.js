@@ -21,6 +21,14 @@
     status: '',
     error: null,
     search: [],
+    runFilter: 'all',
+    runRegion: 'all',
+    runView: load('rp.runview', 'list'),
+    run: null,
+    runQ: '',
+    openRun: null,
+    runsBusy: false,
+    runsErr: null,
     lastGuid: load('rp.last', null)
   };
 
@@ -60,6 +68,10 @@
     try {
       var r = await buildForecast(st, setStatus);
       S.result = r;
+      window.__last = r;               /* debug handle for the browser tests */
+      /* Write this forecast down before showing it, so it can be scored against
+         what the river actually does. Best effort — never block the view. */
+      try { await RiverArchive.record(r); } catch (e2) {}
     } catch (e) {
       S.error = String(e && e.message || e);
     }
@@ -102,14 +114,14 @@
 
     /* ---- 4. calibrate (cached) ------------------------------------------- */
     var cached = load('rp.cal.' + st.guid, null);
-    var par, fit;
-    if (cached && cached.at && (Date.now() - cached.at) < CACHE_DAYS * 86400000 && cached.v === 3) {
-      par = cached.par; fit = cached.fit;
+    var par, fit, split, bt;
+    if (cached && cached.at && (Date.now() - cached.at) < CACHE_DAYS * 86400000 && cached.v === 4) {
+      par = cached.par; fit = cached.fit; split = cached.split; bt = cached.bt;
       status('Using stored calibration…');
     } else {
-      var res = await runCalibration(hist, w.obs, w.windows, st.area, status);
-      par = res.par; fit = res.fit;
-      save('rp.cal.' + st.guid, { at: Date.now(), v: 3, par: par, fit: fit });
+      var res = await runCalibration(hist, w, st.area, status);
+      par = res.par; fit = res.fit; split = res.split; bt = res.bt;
+      save('rp.cal.' + st.guid, { at: Date.now(), v: 4, par: par, fit: fit, split: split, bt: bt });
     }
 
     /* ---- 5. live forcing: recent past + deterministic forecast ----------- */
@@ -154,8 +166,13 @@
     var spin = M.simulate(spinF, par, st.area, 1, null, state0);
     var qSimNow = spin.q[spin.q.length - 1];
 
+    /* How hard to pull the model onto the live gauge reading is not a constant.
+       The river's own backtest swept it and picked the value that forecast its
+       own history best — on the Severn, no assimilation scores -8% against
+       persistence and this weight scores +28%. */
+    var daWeight = (bt && bt.weight != null) ? bt.weight : 1;
     var da = { state: spin.state, ratio: 1 };
-    if (obsNow && obsNow.v > 0) da = M.assimilate(spin.state, qSimNow, obsNow.v, par);
+    if (obsNow && obsNow.v > 0) da = M.assimilate(spin.state, qSimNow, obsNow.v, par, { weight: daWeight });
 
     /* ---- 8. ensemble forward --------------------------------------------- */
     status('Running the rainfall ensemble…');
@@ -173,11 +190,46 @@
     status('Checking recent accuracy…');
     var verif = verifyRecent(live, obsSeries, par, st.area, nowIdx);
 
-    var fc = M.ensemble(members, par, st.area, 1, da.state, verif ? verif.sigma : null);
+    /* Uncertainty by lead time. The rolling backtest spans two years and every
+       flood in them; the live hindcast spans a fortnight of whatever the
+       weather happened to be doing. Prefer the backtest, and fall back. */
+    var sigma = btSigmaHourly(bt) || (verif ? verif.sigma : null);
+    var fc = M.ensemble(members, par, st.area, 1, da.state, sigma);
 
-    /* ---- 10. bands from this river's own flow duration curve ------------- */
+    /* ---- 9b. score past forecasts, and let them widen or narrow this one -- */
+    status('Scoring past forecasts…');
+    var arch = null, spreadFactor = 1;
+    try {
+      await RiverArchive.verifyAll(st.guid, obsSeries);
+      arch = await RiverArchive.stats(st.guid);
+      /* Once enough real forecasts have matured, the measured coverage of the
+         stated 80% band overrides the modelled spread. An ensemble that turns
+         out to have been too confident gets widened by exactly the factor the
+         record says it was short by — the one place where writing forecasts
+         down actually changes what the app tells you next. */
+      if (arch && arch.n >= 12 && arch.spreadFactor && Math.abs(arch.spreadFactor - 1) > 0.05) {
+        spreadFactor = arch.spreadFactor;
+        rescaleSpread(fc, spreadFactor);
+      }
+    } catch (e) { /* archive unavailable (private browsing, quota) — carry on */ }
+
+    /* ---- 10. the runnable band ------------------------------------------- */
     var stats = M.flowStats(daily.map(function (x) { return x.v; }));
-    var band = S.band[st.guid] || defaultBand(stats);
+    var band = null, runBand = null;
+    if (S.run && S.run.bands && rating) {
+      /* Real paddler thresholds in metres, converted to flow through the rating.
+         Medium is the bottom of a good level and very high (or huge) the top. */
+      var b = S.run.bands;
+      var loKey = b.medium != null ? 'medium' : 'low';
+      var hiKey = b.veryHigh != null ? 'veryHigh' : (b.huge != null ? 'huge' : 'high');
+      var loM = b[loKey], hiM = b[hiKey];
+      var lo = levelToFlow(loM, rating), hi = levelToFlow(hiM, rating);
+      if (lo > 0 && hi > lo) {
+        band = { lo: lo, hi: hi };
+        runBand = { lo: loM, hi: hiM, loKey: loKey, hiKey: hiKey };
+      }
+    }
+    if (!band) band = S.band[st.guid] || defaultBand(stats);
 
     var times = [];
     for (var i = nowIdx + 1; i < live.time.length; i++) times.push(live.time[i]);
@@ -192,46 +244,99 @@
       nMembers: members.length, nPts: hist.nPts,
       pastTime: live.time.slice(0, nowIdx + 1), pastQ: spin.q,
       rainPast: live.p.slice(0, nowIdx + 1), rainFc: live.p.slice(nowIdx + 1),
+      arch: arch, spreadFactor: spreadFactor, split: split, bt: bt, daWeight: daWeight,
+      run: S.run, runBand: runBand,
       builtAt: Date.now()
     };
   }
 
-  function runCalibration(forcing, obs, windows, area, status) {
+  /* Widen (or tighten) the quantiles about the median in log space. */
+  function rescaleSpread(fc, k) {
+    for (var i = 0; i < fc.p50.length; i++) {
+      var m = fc.p50[i];
+      if (!(m > 0)) continue;
+      ['p10', 'p25', 'p75', 'p90'].forEach(function (q) {
+        var v = fc[q][i];
+        if (v > 0) fc[q][i] = m * Math.pow(v / m, k);
+      });
+    }
+  }
+
+  function runCalibration(forcing, w, area, status) {
+    var labels = {
+      calibrate: 'Fitting the model to this river',
+      split:     'Checking it hasn’t just memorised the record',
+      backtest:  'Back-testing it against two years of this river'
+    };
     return new Promise(function (resolve, reject) {
       var wk;
       try { wk = new Worker('worker.js'); }
       catch (e) {
         /* no worker (rare) — run inline and accept the pause */
-        status('Calibrating…');
-        var cal = M.calibrate(forcing, obs, windows, area, 1,
-          { pop: 32, gen: 60, warmup: Math.min(180, Math.floor(windows.length * 0.25)), seed: 7 });
-        return resolve({ par: cal.par, fit: { kge: cal.kge, nse: NaN } });
+        status('Fitting the model to this river…');
+        var cal = M.calibrate(forcing, w.obs, w.windows, area, 1,
+          { pop: 32, gen: 60, warmup: Math.min(180, Math.floor(w.windows.length * 0.25)), seed: 7 });
+        var bt = null;
+        try {
+          bt = M.backtestDaily(forcing, w.windows, w.obs, cal.par, area, 1,
+            { leadDays: 5, warmup: 180, months: w.months });
+        } catch (e3) {}
+        return resolve({ par: cal.par, fit: { kge: cal.kge, nse: NaN }, split: null,
+                         bt: bt ? { weight: bt.best.weight, nOrigins: bt.nOrigins, bounds: bt.bounds,
+                                    mae: Array.from(bt.best.mae), per: Array.from(bt.best.per),
+                                    climo: Array.from(bt.best.climo), skill: Array.from(bt.best.skill),
+                                    sigma: Array.from(bt.best.sigma),
+                                    regime: bt.best.regime, sweep: [] } : null });
       }
       wk.onmessage = function (ev) {
         var m = ev.data;
-        if (m.type === 'progress') status('Calibrating to this river — ' + Math.round(m.pct * 100) + '%');
-        else if (m.type === 'done') { wk.terminate(); resolve({ par: m.par, fit: m.fit }); }
-        else if (m.type === 'error') { wk.terminate(); reject(new Error(m.message)); }
+        if (m.type === 'progress') {
+          var lab = labels[m.phase] || 'Working';
+          status(lab + (m.phase === 'calibrate' ? ' — ' + Math.round(m.pct * 100) + '%' : '…'));
+        } else if (m.type === 'done') {
+          wk.terminate();
+          resolve({ par: m.par, fit: m.fit, split: m.split, bt: m.bt });
+        } else if (m.type === 'error') { wk.terminate(); reject(new Error(m.message)); }
       };
       wk.onerror = function (e) { wk.terminate(); reject(new Error('Calibration failed: ' + e.message)); };
-      status('Calibrating to this river…');
+      status('Fitting the model to this river…');
       wk.postMessage({ cmd: 'calibrate', p: forcing.p, t: forcing.t, e: forcing.e,
-                       obs: obs, windows: windows, area: area });
+                       obs: w.obs, windows: w.windows, months: w.months, area: area });
     });
+  }
+
+  /* The backtest measures error at daily leads; the fan needs it hourly. Hold
+     each day's value across its 24 hours rather than inventing a smooth curve
+     the data does not support. */
+  function btSigmaHourly(bt) {
+    if (!bt || !bt.sigma || !bt.sigma.length) return null;
+    var out = new Float64Array(bt.sigma.length * 24);
+    for (var i = 0; i < out.length; i++) out[i] = bt.sigma[Math.floor(i / 24)];
+    return out;
+  }
+
+  /* Which part of its own range the river is sitting in right now — the
+     backtest scores each of these separately, and they differ enormously. */
+  function regimeOf(q, bt) {
+    if (!bt || !bt.bounds) return null;
+    if (q < bt.bounds.low) return 'low';
+    if (q > bt.bounds.high) return 'high';
+    return 'mid';
   }
 
   /* Daily-mean flow is reported against a 09:00 day boundary; match it. */
   function buildWindows(time, daily) {
     var idx = {}, i;
     for (i = 0; i < time.length; i++) idx[time[i]] = i;
-    var windows = [], obs = [];
+    var windows = [], obs = [], months = [];
     for (i = 0; i < daily.length; i++) {
       var a = idx[daily[i].date + 'T09:00'];
       if (a == null || a + 24 > time.length) continue;
       windows.push([a, a + 24]);
       obs.push(daily[i].v);
+      months.push(+daily[i].date.slice(5, 7));
     }
-    return { windows: windows, obs: obs };
+    return { windows: windows, obs: obs, months: months };
   }
 
   function indexOfNow(times) {
@@ -337,6 +442,7 @@
       b.classList.toggle('on', b.getAttribute('data-tab') === S.tab);
     });
     if (S.tab === 'pick') return renderPick();
+    if (S.tab === 'runs') return renderRuns();
     if (S.tab === 'model') return renderModel();
     return renderNow();
   }
@@ -352,13 +458,15 @@
     }
 
     var st = S.station;
-    h += '<div class="card head-card">'
-      + '<div class="riv">' + esc(st.river || 'River') + '</div>'
-      + '<div class="stn">' + esc(st.label) + '</div>'
-      + '<div class="meta">' + (st.area ? st.area.toLocaleString() + ' km² catchment' : 'no catchment area') + (st.nrfa ? ' · NRFA ' + esc(st.nrfa) : '') + '</div>'
+    h += '<div class="card">'
+      + '<div class="eyebrow">' + esc(S.run ? (S.run.country || '') + (S.run.grade ? ' · grade ' + S.run.grade : '') : (st.river || 'River')) + '</div>'
+      + '<div class="title">' + esc(S.run ? S.run.name : st.label) + '</div>'
+      + '<div class="meta">' + (S.run ? 'gauge: ' + esc(st.label) + ' · ' : '') + (st.area ? st.area.toLocaleString() + ' km² catchment' : 'no catchment area') + '</div>'
       + '<div class="acts"><button class="btn" data-act="gopick">Change river</button>'
       + '<button class="btn' + (isFav(st.guid) ? ' on' : '') + '" data-act="fav">' + (isFav(st.guid) ? '★ Saved' : '☆ Save') + '</button>'
-      + '<button class="btn" data-act="refresh">Refresh</button></div></div>';
+      + '<button class="btn" data-act="refresh">Refresh</button>'
+      + (S.run ? '<button class="btn" data-act="clearrun">Use gauge stats instead</button>' : '')
+      + '</div></div>';
 
     if (S.busy) { h += '<div class="card"><div class="spin"></div><div class="muted">' + esc(S.status || 'Working…') + '</div></div>'; A.innerHTML = h; return; }
     if (S.error) { h += '<div class="card err"><b>Couldn’t build a forecast</b><p class="muted">' + esc(S.error) + '</p></div>'; A.innerHTML = h; return; }
@@ -369,6 +477,8 @@
     h += chartCard(r);
     h += windowCard(r);
     h += bandCard(r);
+    h += backtestCard(r);
+    h += recordCard(r);
     h += trustCard(r);
     h += footerCard(r);
     A.innerHTML = h;
@@ -392,13 +502,13 @@
     var pk = peakOf(r);
     var h = '<div class="card verdict ' + d.tone + '">'
       + '<div class="vrow"><div><div class="lab">Right now</div>'
-      + '<div class="big">' + fmtQ(now, r) + '</div>'
+      + '<div class="display">' + fmtQ(now, r) + '</div>'
       + (lvl ? '<div class="sub">≈ ' + lvl + ' on the gauge board</div>' : '')
-      + '</div><div class="badge ' + d.tone + '">' + esc(d.label) + '</div></div>'
+      + '</div><div class="pill" style="background:' + toneColor(d.tone) + '">' + esc(d.label) + '</div></div>'
       + '<p class="muted">' + esc(d.note || '') + (r.obsNow ? ' Reading from ' + esc(shortTime(r.obsNow.t)) + '.' : ' No live reading — this is the model’s own estimate.') + '</p>';
 
     if (pk) {
-      h += '<div class="peak"><b>' + (pk.rising ? 'Rising' : 'Falling') + '.</b> '
+      h += '<div class="banner"><b>' + (pk.rising ? 'Rising' : 'Falling') + '.</b> '
         + (pk.rising
             ? 'Peak around <b>' + fmtQ(pk.q, r) + '</b> ' + esc(pk.when) + ' (' + fmtQ(pk.lo, r) + '–' + fmtQ(pk.hi, r) + ' across the ensemble).'
             : 'Dropping away — down to about <b>' + fmtQ(pk.q, r) + '</b> by ' + esc(pk.when) + '.')
@@ -514,13 +624,18 @@
   function bandCard(r) {
     var s = r.stats;
     var h = '<div class="card"><div class="lab">Your runnable band</div>'
-      + '<p class="muted">Set from this river’s own flow record rather than a guidebook — so it works on rivers nobody has written one for. Percentiles are the share of days the river runs at or above that flow.</p>'
+      + (r.runBand
+          ? '<p class="muted">From the paddler levels recorded for <b>' + esc(r.run.name) + '</b> — '
+            + esc((RiverRuns.CAT_LABEL[r.runBand.loKey] || r.runBand.loKey).toLowerCase()) + ' (' + r.runBand.lo.toFixed(2) + ' m) to '
+            + esc((RiverRuns.CAT_LABEL[r.runBand.hiKey] || r.runBand.hiKey).toLowerCase()) + ' (' + r.runBand.hi.toFixed(2) + ' m), '
+            + 'converted to flow through this gauge’s rating curve. Drag to adjust.</p>'
+          : '<p class="muted">Set from this river’s own flow record rather than a guidebook — so it works on rivers nobody has written one for. Percentiles are the share of days the river runs at or above that flow.</p>')
       + '<div class="bandrow"><label>Bottom</label><input type="range" id="blo" min="0" max="100" value="' + pctOf(r.band.lo, s) + '"><span id="blov">' + fmtQ(r.band.lo, r) + '</span></div>'
       + '<div class="bandrow"><label>Top</label><input type="range" id="bhi" min="0" max="100" value="' + pctOf(r.band.hi, s) + '"><span id="bhiv">' + fmtQ(r.band.hi, r) + '</span></div>';
-    h += '<div class="fdc">';
+    h += '<div class="grid g5">';
     [['Q95', s.q95, 'dry summer'], ['Q50', s.q50, 'typical day'], ['Q20', s.q20, 'wet'], ['Q5', s.q5, 'high'], ['max', s.max, 'record']]
       .forEach(function (x) {
-        h += '<div class="fcell"><div class="fk">' + x[0] + '</div><div class="fv">' + fmtQ(x[1], r) + '</div><div class="fn">' + x[2] + '</div></div>';
+        h += '<div class="cell"><div class="k">' + x[0] + '</div><div class="v">' + fmtQ(x[1], r) + '</div><div class="n">' + x[2] + '</div></div>';
       });
     return h + '</div></div>';
   }
@@ -544,9 +659,150 @@
     return ex > 95 ? s.q95 : s.max;
   }
 
+  /* --------------------------------------------------------------------------
+     TRACK RECORD
+
+     The hindcast card below measures the model. This one measures the app: the
+     forecasts it actually showed, scored against what the river then did. It is
+     the only number here that has paid for the rainfall forecast being wrong,
+     so it is the honest one — and it is always the worse of the two.
+     ------------------------------------------------------------------------ */
+  function recordCard(r) {
+    var a = r.arch;
+    var h = '<div class="card"><div class="lab">Its actual track record here</div>';
+    if (!a || !a.n) {
+      h += '<p class="muted">Every forecast this app shows you is written down and scored later against what the river actually did — including the days the rain forecast was wrong, which the hindcast below quietly gets for free.</p>'
+        + '<p class="muted">' + (a && a.pending
+            ? a.pending + ' forecast' + (a.pending === 1 ? '' : 's') + ' recorded here, none matured yet. Scores appear once the first one has run its full five days.'
+            : 'Nothing scored yet — this is the first forecast recorded for this gauge. Open it again over the coming week and the record builds itself.') + '</p>';
+      return h + '</div>';
+    }
+    var days = Math.max(1, Math.round((Date.now() - a.oldest) / 86400000));
+    var rows = [6, 24, 48, 72].filter(function (L) { return L <= a.mae.length && a.counts[L - 1] > 0; });
+    h += '<table class="verif"><tr><th>Lead</th><th>Forecast</th><th>“No change”</th><th>Beats it by</th><th>In band</th></tr>';
+    rows.forEach(function (L) {
+      var sk = a.skill[L - 1];
+      var cell = sk < -1 ? 'much worse' : (sk >= 0 ? '+' : '') + Math.round(sk * 100) + '%';
+      h += '<tr><td>' + L + ' h</td><td>' + a.mae[L - 1].toFixed(2) + '</td><td>' + a.per[L - 1].toFixed(2) + '</td>'
+        + '<td class="' + (sk > 0.05 ? 'good' : sk < -0.05 ? 'bad' : '') + '">' + cell + '</td>'
+        + '<td>' + Math.round(a.cov[L - 1] * 100) + '%</td></tr>';
+    });
+    h += '</table>';
+    h += '<p class="muted">' + a.n + ' matured forecast' + (a.n === 1 ? '' : 's') + ' over ' + days + ' day' + (days === 1 ? '' : 's')
+      + (a.pending ? ', ' + a.pending + ' still running' : '') + '. Error in ' + (r.kind === 'flow' ? 'm³/s' : 'm') + '. '
+      + '“In band” is how often the outcome landed inside the shaded 80% range — it should read about 80%.</p>';
+
+    if (a.coverage != null) {
+      var pct = Math.round(a.coverage * 100);
+      var adj = r.spreadFactor && Math.abs(r.spreadFactor - 1) > 0.05;
+      h += '<p class="verdict-line ' + (Math.abs(pct - 80) <= 8 ? 'good' : 'ok') + '">'
+        + (Math.abs(pct - 80) <= 8
+            ? 'The 80% band has been right about ' + pct + '% of the time. Honest width.'
+            : pct < 80
+              ? 'The 80% band only caught ' + pct + '% of outcomes — this app has been overconfident here'
+                + (adj ? ', so the range above has been widened by ' + r.spreadFactor.toFixed(2) + '× to match.' : '.')
+              : 'The 80% band caught ' + pct + '% of outcomes — wider than it needed to be'
+                + (adj ? ', so the range above has been tightened by ' + r.spreadFactor.toFixed(2) + '×.' : '.'))
+        + '</p>';
+    }
+    h += '<div class="acts"><button class="btn" data-act="export">Export the record</button></div>';
+    return h + '</div>';
+  }
+
+  /* --------------------------------------------------------------------------
+     BACKTEST CARD
+
+     Every gauge is scored against its own two-year record, and the answer is
+     given for the regime the river is in *today*. An average across all
+     conditions is close to useless on the day: the same model can be worth 60%
+     over persistence in a flood and worse than useless on a flat summer
+     recession, and knowing which of those you are looking at right now is the
+     whole point.
+     ------------------------------------------------------------------------ */
+  function backtestCard(r) {
+    var bt = r.bt, sp = r.split;
+    var h = '<div class="card"><div class="lab">Back-tested on this river</div>';
+    if (!bt) {
+      h += '<p class="muted">Not enough record at this gauge to back-test against.</p>';
+      return h + '</div>';
+    }
+
+    var now = r.obsNow ? r.obsNow.v : r.qSimNow;
+    var reg = regimeOf(now, bt);
+    var names = { low: 'low water', mid: 'middling water', high: 'high water' };
+    var rg = reg && bt.regime && bt.regime[reg];
+
+    if (rg && rg.n > 20) {
+      var s1 = rg.skill[0], s3 = rg.skill[Math.min(2, rg.skill.length - 1)];
+      var tone = s1 > 0.2 ? 'good' : s1 > 0 ? 'ok' : 'bad';
+      h += '<p class="verdict-line ' + tone + '">Right now this river is in <b>' + names[reg] + '</b>. '
+        + 'Across ' + rg.n + ' days like today in the last two years, this model beat “no change” by '
+        + Math.round(s1 * 100) + '% at one day and ' + Math.round(s3 * 100) + '% at three'
+        + (s1 <= 0 ? ' — that is, it did not. In this regime, believe the gauge over the forecast.' : '.')
+        + '</p>';
+    }
+
+    h += '<table class="verif"><tr><th>Lead</th><th>Model</th><th>“No change”</th><th>Skill</th></tr>';
+    bt.mae.forEach(function (m, i) {
+      var sk = bt.skill[i];
+      h += '<tr><td>+' + (i + 1) + ' d</td><td>' + fmtSmall(m) + '</td><td>' + fmtSmall(bt.per[i]) + '</td>'
+        + '<td class="' + (sk > 0.05 ? 'good' : sk < -0.05 ? 'bad' : '') + '">' + (sk >= 0 ? '+' : '') + Math.round(sk * 100) + '%</td></tr>';
+    });
+    h += '</table>';
+    h += '<p class="muted">' + bt.nOrigins + ' rolling forecasts, one from every day of the record. '
+      + 'Mean absolute error in ' + (r.kind === 'flow' ? 'm³/s' : 'm') + '. '
+      + 'For scale, guessing the seasonal normal every day gives ' + fmtSmall(bt.climo[0]) + ' at one day.</p>';
+
+    /* skill split by regime */
+    h += '<div class="grid g3">';
+    ['low', 'mid', 'high'].forEach(function (k) {
+      var g = bt.regime && bt.regime[k];
+      if (!g || !g.n) return;
+      var v1 = g.skill[0];
+      h += '<div class="cell' + (k === reg ? ' on' : '') + '"><div class="k">' + names[k] + '</div>'
+        + '<div class="v ' + (v1 > 0.05 ? 'good' : v1 < -0.05 ? 'bad' : '') + '">' + (v1 >= 0 ? '+' : '') + Math.round(v1 * 100) + '%</div>'
+        + '<div class="n">' + g.n + ' days</div></div>';
+    });
+    h += '</div><p class="muted">Skill against “no change” at one day, by how much water the river was carrying. '
+      + 'Low-water days are where most models quietly fall apart, because a flat recession is very hard to beat.</p>';
+
+    /* split-sample honesty */
+    if (sp && isFinite(sp.kgeVal)) {
+      var drop = sp.kgeCal - sp.kgeVal;
+      h += '<div class="lab" style="margin-top:18px">Has it just memorised the record?</div>'
+        + '<p class="muted">Fitted on the first ' + sp.nCal + ' days and scored on ' + sp.nVal + ' later days it never saw: '
+        + 'KGE ' + sp.kgeCal.toFixed(2) + ' on the data it learned from, <b>' + sp.kgeVal.toFixed(2) + '</b> on data it did not.'
+        + (drop > 0.15
+            ? ' That is a real drop — the fit here flatters itself, so lean on the back-test numbers above rather than the calibration score.'
+            : ' Close enough to say it has learned the river rather than the record.')
+        + '</p>';
+    }
+
+    /* what the backtest changed */
+    if (bt.sweep && bt.sweep.length > 1) {
+      var off = bt.sweep.filter(function (x) { return x.weight === 0; })[0];
+      h += '<div class="lab" style="margin-top:18px">What it tuned</div>'
+        + '<p class="muted">The back-test swept how hard to pull the model onto the live gauge reading and chose <b>'
+        + Math.round(bt.weight * 100) + '%</b> for this river'
+        + (off ? ', against ' + Math.round(off.skill3 * 100) + '% skill with no anchoring at all' : '')
+        + '. It also sets the width of the shaded fan on the chart, from two years of its own errors rather than the last fortnight.</p>';
+    }
+    return h + '</div>';
+  }
+
+  function toneColor(t) {
+    return { low: 'var(--lv-low)', good: 'var(--lv-medium)', warn: 'var(--lv-vhigh)',
+             bad: 'var(--lv-huge)', na: 'var(--lv-none)' }[t] || 'var(--lv-none)';
+  }
+
+  function fmtSmall(v) {
+    if (!isFinite(v)) return '—';
+    return v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2);
+  }
+
   function trustCard(r) {
     var v = r.verif;
-    var h = '<div class="card"><div class="lab">How much to trust this</div>';
+    var h = '<div class="card"><div class="lab">The model, with rainfall known</div>';
     if (!v || !v.nOrigins) {
       h += '<p class="muted">Not enough recent 15-minute readings at this gauge to score the model honestly. The fit to the two-year record scored KGE '
         + (r.fit && isFinite(r.fit.kge) ? r.fit.kge.toFixed(2) : '—') + '.</p>';
@@ -621,18 +877,277 @@
 
   function stationRow(s) {
     var ok = !!s.area && s.hasFlow;
-    return '<div class="srow" data-guid="' + esc(s.guid) + '">'
-      + '<div class="sinfo"><div class="sn2">' + esc(s.label) + '</div>'
-      + '<div class="sm">' + esc(s.river || '—') + (s.area ? ' · ' + s.area.toLocaleString() + ' km²' : '') + '</div></div>'
-      + '<div class="stag ' + (ok ? 'ok' : 'part') + '">' + (ok ? 'full model' : s.area ? 'level only' : 'no catchment') + '</div>'
-      + '</div>';
+    return '<button class="row" data-guid="' + esc(s.guid) + '">'
+      + '<div class="rowtop"><div class="rowname">'
+      + '<b>' + esc(s.label) + '</b>'
+      + '<span>' + esc(s.river || 'gauge') + '</span></div>'
+      + '<span class="pill ' + (ok ? 'accent' : 'ghost') + '">' + (ok ? 'full model' : s.area ? 'level only' : 'no catchment') + '</span>'
+      + '</div>'
+      + (s.area ? '<div class="rowmeta">' + s.area.toLocaleString() + ' km² catchment</div>' : '')
+      + '</button>';
   }
+
+  /* ---- runs tab ----------------------------------------------------------- */
+  function renderRuns() {
+    if (S.openRun) return renderRunDetail();
+
+    var total = RiverRuns.all().length;
+    var fcN = RiverRuns.all().filter(function (x) { return x.canForecast; }).length;
+    var h = '<div class="card runfilter">'
+      + '<input class="inp" id="rq" placeholder="Search a river — “Dart”, “Tees”, “Etive”" value="' + esc(S.runQ) + '">'
+      + '<div class="chips" style="margin-top:10px">'
+      + [['all','Everywhere'],['ew','England & Wales'],['sco','Scotland'],['fc','Forecastable']].map(function (o) {
+          return '<button class="chip' + (S.runRegion === o[0] ? ' on' : '') + '" data-rr="' + o[0] + '">' + o[1] + '</button>';
+        }).join('')
+      + '</div>'
+      + '<div class="chips" style="margin-top:7px">'
+      + [['all','All'],['on','Running now'],['low','Low'],['big','Big']].map(function (o) {
+          return '<button class="chip sm' + (S.runFilter === o[0] ? ' on' : '') + '" data-rf="' + o[0] + '">' + o[1] + '</button>';
+        }).join('')
+      + '</div>'
+      + '<details class="about"><summary>' + total + ' runs · ' + fcN + ' with a 5-day forecast</summary>'
+      + '<p class="muted">Sections and the levels paddlers actually use, from two open catalogues — '
+      + '<a href="https://github.com/robtuley/rainchasers" target="_blank" rel="noopener">Rainchasers</a> for England and Wales and '
+      + '<a href="https://www.canoescotland.org/go-paddling/wheres-the-water" target="_blank" rel="noopener">Where’s the Water</a> for Scotland.</p>'
+      + '<p class="muted">Runs marked <b>5-day forecast</b> sit on a gauge with a flow record and a catchment area, so the whole model runs on them. '
+      + 'The rest show the live reading only — Scottish gauges because SEPA publishes stage rather than flow.</p>'
+      + '</details></div>';
+
+    if (S.runsBusy) return void (A.innerHTML = h + '<div class="card"><div class="spin"></div><div class="muted">Reading ' + (RiverRuns.all().length || 122) + ' Scottish gauges…</div></div>');
+    if (S.runsErr)  return void (A.innerHTML = h + '<div class="card err"><b>Couldn’t reach SEPA</b><p class="muted">' + esc(S.runsErr) + '</p></div>');
+
+    var list = filteredRuns();
+    var on = list.filter(function (r) { return r.cls && ['medium', 'high'].indexOf(r.cls.cat) >= 0; }).length;
+
+    h += '<div class="sectionhead"><div class="lab2" style="margin:0">' + list.length + ' shown · ' + on + ' in good water</div>'
+      + '<div class="seg">'
+      + '<button class="segb' + (S.runView === 'list' ? ' on' : '') + '" data-rv="list">List</button>'
+      + '<button class="segb' + (S.runView === 'map' ? ' on' : '') + '" data-rv="map">Map</button>'
+      + '</div></div>';
+
+    if (S.runView === 'map') {
+      h += '<div class="card flush"><div id="runmap"></div>' + mapLegend() + '</div>';
+      h += attributionCard();
+      A.innerHTML = h;
+      drawRunMap(list);
+      return;
+    }
+
+    if (!list.length) h += '<div class="card"><p class="muted">Nothing matches.</p></div>';
+    list.forEach(function (r) { h += runRow(r); });
+
+    h += attributionCard();
+    A.innerHTML = h;
+    teardownRunMap();
+  }
+
+  function filteredRuns() {
+    var list = RiverRuns.all().filter(function (r) {
+      if (S.runRegion === 'ew'  && r.s.country !== 'England/Wales') return false;
+      if (S.runRegion === 'sco' && r.s.country !== 'Scotland') return false;
+      if (S.runRegion === 'fc'  && !r.canForecast) return false;
+      if (S.runQ && r.s.name.toLowerCase().indexOf(S.runQ.toLowerCase()) < 0) return false;
+      if (S.runFilter === 'all') return true;
+      if (!r.cls) return false;
+      if (S.runFilter === 'on')  return ['medium', 'high'].indexOf(r.cls.cat) >= 0;
+      if (S.runFilter === 'low') return ['tooLow', 'scrape', 'low'].indexOf(r.cls.cat) >= 0;
+      if (S.runFilter === 'big') return ['veryHigh', 'huge'].indexOf(r.cls.cat) >= 0;
+      return true;
+    });
+    /* runs that are in should surface first, then everything else by name */
+    var rank = { medium: 0, high: 1, veryHigh: 2, low: 3, scrape: 4, huge: 5, tooLow: 6 };
+    return list.sort(function (a, b) {
+      var ra = a.cls ? rank[a.cls.cat] : 9, rb = b.cls ? rank[b.cls.cat] : 9;
+      return ra !== rb ? ra - rb : (a.s.name < b.s.name ? -1 : 1);
+    });
+  }
+
+  function mapLegend() {
+    var keys = ['low', 'medium', 'high', 'veryHigh', 'huge'];
+    return '<div class="maplegend">' + keys.map(function (k) {
+      return '<span><i style="background:' + RiverRuns.colorOf(k) + '"></i>' + esc(RiverRuns.CAT_LABEL[k]) + '</span>';
+    }).join('') + '</div>';
+  }
+
+  /* ---- map ---------------------------------------------------------------- */
+  var runMap = null, runLayer = null;
+
+  /* A teardrop pin, drawn inline so it takes the level colour directly. Circles
+     read as data points; pins read as places, which is what a run is. */
+  function pinIcon(color) {
+    var svg = '<svg viewBox="0 0 22 30" xmlns="http://www.w3.org/2000/svg">'
+      + '<path d="M11 29.2C11 29.2 20.5 17.6 20.5 11A9.5 9.5 0 1 0 1.5 11c0 6.6 9.5 18.2 9.5 18.2z" '
+      + 'fill="' + color + '" stroke="#fff" stroke-width="1.8"/>'
+      + '<circle cx="11" cy="10.8" r="3.4" fill="#fff" fill-opacity=".92"/></svg>';
+    return L.divIcon({ className: 'pin', html: svg, iconSize: [22, 30],
+                       iconAnchor: [11, 29], popupAnchor: [0, -26] });
+  }
+
+  function teardownRunMap() {
+    if (runMap) { try { runMap.remove(); } catch (e) {} }
+    runMap = null; runLayer = null;
+  }
+
+  function drawRunMap(list) {
+    var el = document.getElementById('runmap');
+    if (!el) return;
+    if (!(window.L && window.L.map)) {
+      el.innerHTML = '<div class="map-msg">The map needs a connection the first time it loads. Reconnect and reopen this tab.</div>';
+      return;
+    }
+    teardownRunMap();
+    try {
+      runMap = L.map('runmap', { zoomControl: true, attributionControl: true }).setView([55.5, -3.5], 5);
+      /* OpenStreetMap's own tile servers refuse application traffic under their
+         usage policy, and say so on the tiles. Carto's basemaps are keyless and
+         permit this; the muted styling also lets the coloured pins carry the
+         page instead of competing with a full-colour street map. */
+      var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      L.tileLayer('https://basemaps.cartocdn.com/' + (dark ? 'dark_all' : 'light_all') + '/{z}/{x}/{y}{r}.png', {
+        maxZoom: 16, subdomains: 'abcd',
+        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/attributions">CARTO</a>'
+      }).addTo(runMap);
+      runLayer = L.layerGroup().addTo(runMap);
+    } catch (e) { return; }
+
+    var bounds = [];
+    list.forEach(function (r) {
+      var lat = r.s.lat, lon = r.s.lon;
+      if (!(lat && lon)) return;
+      var col = r.cls ? RiverRuns.colorOf(r.cls.cat) : '#8c9aa5';
+      var mk = L.marker([lat, lon], { icon: pinIcon(col), riseOnHover: true }).addTo(runLayer);
+      mk.bindPopup(
+        '<b>' + esc(r.s.name) + '</b><br>'
+        + (r.s.grade ? 'Grade ' + esc(r.s.grade) + ' · ' : '')
+        + (r.level != null ? r.level.toFixed(2) + ' m' : 'no reading')
+        + (r.cls ? ' · <b style="color:' + col + '">' + esc(r.cls.label) + '</b>' : '')
+        + '<br><a href="#" data-mapopen="' + esc(r.s.slug) + '">Open this run →</a>');
+      bounds.push([lat, lon]);
+    });
+
+    /* Leaflet measures the container on creation, and the card has only just
+       been written into the DOM — size it again once layout has settled. */
+    requestAnimationFrame(function () {
+      setTimeout(function () {
+        if (!runMap) return;
+        runMap.invalidateSize();
+        if (bounds.length) runMap.fitBounds(bounds, { padding: [26, 26], maxZoom: 10 });
+      }, 60);
+    });
+  }
+
+  function attributionCard() {
+    var m = RiverRuns.meta();
+    if (!m) return '';
+    var h = '<div class="card small">';
+    (m.sources || []).forEach(function (src) {
+      h += '<p class="muted">' + esc(src.attribution) + ' <a href="' + esc(src.url) + '" target="_blank" rel="noopener">source ↗</a></p>';
+    });
+    if (m.levelAttribution) h += '<p class="muted">' + esc(m.levelAttribution) + '</p>';
+    return h + '</div>';
+  }
+
+  function runRow(r) {
+    var cls = r.cls;
+    var col = cls ? RiverRuns.colorOf(cls.cat) : 'var(--lv-none)';
+    var meta = [];
+    if (r.s.grade) meta.push('Grade ' + esc(r.s.grade));
+    if (r.s.km) meta.push(esc(r.s.km) + ' km');
+    meta.push(r.s.country === 'Scotland' ? 'Scotland' : 'England &amp; Wales');
+
+    return '<button class="row" data-run="' + esc(r.s.slug) + '">'
+      + '<div class="rowtop"><div class="rowname">'
+      + '<b>' + esc(r.s.river || r.s.name) + '</b>'
+      + (r.s.section ? '<span>' + esc(r.s.section) + '</span>' : '')
+      + '</div>'
+      + '<span class="pill" style="background:' + col + '">' + (cls ? esc(cls.label) : 'no reading') + '</span>'
+      + '</div>'
+      + '<div class="rowmeta">' + meta.join(' · ')
+      + '<b class="rowval">' + (r.level != null ? r.level.toFixed(2) + ' m' : '—') + '</b></div>'
+      + meterHtml(r.level, r.s.bands)
+      + (r.canForecast || isHazard(r.s.notes)
+          ? '<div class="rowfoot">'
+            + (r.canForecast ? '<span class="tag fc">5-day forecast</span>' : '')
+            + (isHazard(r.s.notes) ? '<span class="tag hz">hazard</span>' : '')
+            + '</div>' : '')
+      + '</button>';
+  }
+
+  /* The band ladder drawn to scale, with the reading marked on it. Far more
+     use than a percentage: you can see at a glance how much rain would take a
+     run from scrapey to good, or from good to out of condition. */
+  function meterHtml(level, bands) {
+    var lad = RiverRuns.ladder(level, bands);
+    if (!lad) return '<div class="meter empty"></div>';
+    var h = '<div class="meter">';
+    lad.segs.forEach(function (sg) {
+      h += '<i style="left:' + (sg.from * 100).toFixed(1) + '%;width:' + ((sg.to - sg.from) * 100).toFixed(1) + '%;background:' + sg.color + '"></i>';
+    });
+    if (lad.pos != null) h += '<b style="left:' + (lad.pos * 100).toFixed(1) + '%"></b>';
+    return h + '</div><div class="meterends"><span>' + lad.lo.toFixed(2) + ' m</span><span>' + lad.hi.toFixed(2) + ' m</span></div>';
+  }
+
+  function renderRunDetail() {
+    var r = RiverRuns.bySlug(S.openRun);
+    if (!r) { S.openRun = null; return renderRuns(); }
+    var s = r.s, b = s.bands;
+    var h = '<div class="card"><div class="eyebrow">' + esc(s.country || '') + '</div>'
+      + '<div class="title">' + esc(s.name) + '</div>'
+      + '<div class="meta">' + (s.grade ? 'Grade ' + esc(s.grade) + ' · ' : '') + esc((s.gauge && (s.gauge.label || s.gauge.river)) || '') + '</div>'
+      + '<div class="acts"><button class="btn" data-act="backruns">← All runs</button>'
+      + (s.putIn ? '<a class="btn go" href="https://waze.com/ul?ll=' + s.putIn[0] + ',' + s.putIn[1] + '&navigate=yes" target="_blank" rel="noopener">Put-in</a>' : '')
+      + (s.takeOut ? '<a class="btn" href="https://waze.com/ul?ll=' + s.takeOut[0] + ',' + s.takeOut[1] + '&navigate=yes" target="_blank" rel="noopener">Take-out</a>' : '')
+      + (s.guidebook ? '<a class="btn" href="' + esc(s.guidebook) + '" target="_blank" rel="noopener">Guidebook ↗</a>' : '')
+      + '</div>'
+      + (r.canForecast ? '<div class="acts"><button class="btn go" data-act="fcrun">Forecast this run →</button></div>' : '')
+      + '</div>';
+
+    h += '<div class="card verdict ' + (r.cls ? r.cls.tone : 'na') + '"><div class="vrow"><div>'
+      + '<div class="lab">Gauge reading</div>'
+      + '<div class="display">' + (r.level != null ? r.level.toFixed(2) + ' m' : '—') + '</div>'
+      + '<div class="sub">' + (r.at ? esc(shortTime(r.at)) : 'no recent reading') + '</div></div>'
+      + '<div class="pill" style="background:' + (r.cls ? RiverRuns.colorOf(r.cls.cat) : 'var(--lv-none)') + '">' + (r.cls ? esc(r.cls.label) : '—') + '</div></div>'
+      + '<p class="muted">' + (r.canForecast
+          ? 'Gauge reading now. Tap <b>Forecast this run</b> for five days against these levels.'
+          : 'This is what the gauge says now, not a forecast. ' + (s.country === 'Scotland'
+              ? 'SEPA publishes stage rather than flow, which the model cannot yet predict.'
+              : 'This gauge has no flow record or catchment area, so the model cannot run on it.')) + '</p></div>';
+
+    if (b) {
+      h += '<div class="card"><div class="lab">Paddler levels</div><div class="ladder">';
+      RiverRuns.CAT.forEach(function (k) {
+        if (b[k] == null) return;
+        var hit = r.cls && r.cls.cat === k;
+        h += '<div class="rung' + (hit ? ' on' : '') + '">'
+          + '<span class="rk"><i style="background:' + RiverRuns.colorOf(k) + '"></i>' + esc(RiverRuns.CAT_LABEL[k]) + '</span>'
+          + '<span class="rv">' + b[k].toFixed(2) + ' m</span></div>';
+      });
+      h += '</div><p class="muted">Thresholds recorded by paddlers for this section, not derived from statistics.</p></div>';
+    }
+
+    /* Paddler notes carry things that matter more than the level does — trees,
+       wires, weirs, sewage releases. Those get a banner, not a footnote. */
+    var haz = [s.notes, s.access].filter(Boolean).filter(function (t) { return isHazard(t); });
+    haz.forEach(function (t) {
+      h += '<div class="card"><div class="banner warn"><div class="lab">Reported hazard</div><p>' + esc(t) + '</p></div></div>';
+    });
+    if (s.desc)        h += '<div class="card"><div class="lab">The run</div><p class="muted">' + esc(s.desc) + '</p></div>';
+    if (s.directions)  h += '<div class="card"><div class="lab">Directions</div><p class="muted">' + esc(s.directions) + '</p></div>';
+    if (s.access && haz.indexOf(s.access) < 0) h += '<div class="card"><div class="lab">Access</div><p class="muted">' + esc(s.access) + '</p></div>';
+    if (s.notes && haz.indexOf(s.notes) < 0)  h += '<div class="card"><div class="lab">Notes</div><p class="muted">' + esc(s.notes) + '</p></div>';
+
+    h += attributionCard();
+    A.innerHTML = h;
+  }
+
+  var HAZARD = /\b(tree|trees|wire|wires|fence|strainer|weir|sewage|siphon|blockage|do not paddle|portage|dead|log ?jam|barbed)\b/i;
+  function isHazard(t) { return HAZARD.test(t || ''); }
 
   /* ---- model tab --------------------------------------------------------- */
   function renderModel() {
     var r = S.result;
     var h = '<div class="card"><div class="lab">The model</div>'
-      + '<p class="muted">A conceptual store model: rain falls on a soil-moisture store, what the store cannot hold becomes runoff through two quick reservoirs in series, and slow drainage feeds a groundwater store that sets the recession. Seven parameters, fitted per gauge.</p></div>';
+      + '<p class="muted">A conceptual store model: rain falls on a soil-moisture store, what the store cannot hold becomes runoff through two quick reservoirs in series, and slow drainage feeds a nonlinear groundwater store that sets the recession. Eight parameters, fitted per gauge.</p></div>';
     if (!r) { h += '<div class="card"><p class="muted">Open a river to see its fitted parameters.</p></div>'; A.innerHTML = h; return; }
     h += '<div class="card"><div class="lab">Fitted for ' + esc(r.station.label) + '</div><div class="pars">';
     M.PARAMS.forEach(function (p) {
@@ -781,9 +1296,30 @@
 
   document.addEventListener('click', function (ev) {
     var tabBtn = ev.target.closest('.tab');
-    if (tabBtn) { S.tab = tabBtn.getAttribute('data-tab'); render(); return; }
+    if (tabBtn) {
+      S.tab = tabBtn.getAttribute('data-tab');
+      if (S.tab !== 'runs') teardownRunMap();
+      if (S.tab === 'runs') loadRuns();
+      render();
+      return;
+    }
 
-    var row = ev.target.closest('.srow');
+    var mapOpen = ev.target.closest('[data-mapopen]');
+    if (mapOpen) { ev.preventDefault(); S.openRun = mapOpen.getAttribute('data-mapopen'); teardownRunMap(); render(); return; }
+
+    var rv = ev.target.closest('[data-rv]');
+    if (rv) { S.runView = rv.getAttribute('data-rv'); save('rp.runview', S.runView); render(); return; }
+
+    var runRowEl = ev.target.closest('[data-run]');
+    if (runRowEl) { S.openRun = runRowEl.getAttribute('data-run'); teardownRunMap(); render(); return; }
+
+    var rf = ev.target.closest('[data-rf]');
+    if (rf) { S.runFilter = rf.getAttribute('data-rf'); render(); return; }
+
+    var rr = ev.target.closest('[data-rr]');
+    if (rr) { S.runRegion = rr.getAttribute('data-rr'); render(); return; }
+
+    var row = ev.target.closest('[data-guid]');
     if (row) {
       var g = row.getAttribute('data-guid');
       var st = S.search.concat(S.favs).filter(function (s) { return s.guid === g; })[0];
@@ -799,6 +1335,10 @@
     else if (act === 'search') doSearch();
     else if (act === 'near') doNear();
     else if (act === 'refresh' && S.station) openStation(S.station);
+    else if (act === 'export') doExport(b);
+    else if (act === 'backruns') { S.openRun = null; render(); }
+    else if (act === 'fcrun') forecastRun();
+    else if (act === 'clearrun') { S.run = null; if (S.station) openStation(S.station); }
     else if (act === 'fav' && S.station) {
       if (isFav(S.station.guid)) S.favs = S.favs.filter(function (f) { return f.guid !== S.station.guid; });
       else S.favs = S.favs.concat([S.station]);
@@ -812,6 +1352,7 @@
 
   document.addEventListener('input', function (e) {
     if (e.target.id === 'q') { S.q = e.target.value; return; }
+    if (e.target.id === 'rq') { S.runQ = e.target.value; renderRuns(); return; }
     if (!S.result) return;
     if (e.target.id === 'blo' || e.target.id === 'bhi') {
       var r = S.result;
@@ -830,6 +1371,62 @@
   document.addEventListener('change', function (e) {
     if ((e.target.id === 'blo' || e.target.id === 'bhi') && S.result) render();
   });
+
+  /* Hand the archive over as a file. iOS Safari is fussy about programmatic
+     downloads, so fall back to the share sheet and then to the clipboard —
+     between the three, something always works. */
+  async function doExport(btn) {
+    var json;
+    try { json = await RiverArchive.exportAll(); }
+    catch (e) { btn.textContent = 'Nothing stored'; return; }
+    var name = 'riverwise-forecasts-' + new Date().toISOString().slice(0, 10) + '.json';
+    var file = null;
+    try { file = new File([json], name, { type: 'application/json' }); } catch (e) {}
+    if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: 'Riverwise forecast record' }); return; }
+      catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    try {
+      var url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+      var a = document.createElement('a');
+      a.href = url; a.download = name; document.body.appendChild(a); a.click();
+      setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 4000);
+      btn.textContent = 'Exported';
+      return;
+    } catch (e) {}
+    try { await navigator.clipboard.writeText(json); btn.textContent = 'Copied to clipboard'; }
+    catch (e) { btn.textContent = 'Export unavailable'; }
+  }
+
+  /* Open the full forecast for a run's gauge, carrying the run's own paddler
+     levels across. They are in metres; the model works in flow, so they get
+     converted through the rating fitted during the build — which is the whole
+     reason the model predicts flow and converts at the end rather than the
+     other way round. */
+  function forecastRun() {
+    var r = RiverRuns.bySlug(S.openRun);
+    if (!r || !r.canForecast) return;
+    var g = r.s.gauge;
+    S.run = { slug: r.s.slug, name: r.s.name, grade: r.s.grade, bands: r.s.bands,
+              country: r.s.country, putIn: r.s.putIn, takeOut: r.s.takeOut };
+    S.openRun = null;
+    openStation({ guid: g.guid, label: g.label || r.s.name, river: g.river || '',
+                  lat: g.lat, lon: g.lon, area: g.area, eaRef: g.eaRef,
+                  hasFlow: !!g.hasFlow, hasLevel: true, nrfa: null });
+  }
+
+  async function loadRuns() {
+    if (RiverRuns.fetchedAt()) return;
+    S.runsBusy = true; S.runsErr = null;
+    try {
+      await RiverRuns.load();
+      render();                       /* show the list while levels arrive */
+      await RiverRuns.refresh();
+    } catch (e) {
+      S.runsErr = String(e && e.message || e);
+    }
+    S.runsBusy = false; render();
+  }
 
   async function doSearch() {
     var term = (S.q || '').trim();

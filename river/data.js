@@ -19,6 +19,7 @@
   var OM_HIST = 'https://archive-api.open-meteo.com/v1/archive';
   var OM_FC   = 'https://api.open-meteo.com/v1/forecast';
   var OM_ENS  = 'https://ensemble-api.open-meteo.com/v1/ensemble';
+  var SEPA    = 'https://timeseries.sepa.org.uk/KiWIS/KiWIS';
 
   function getJSON(url, ms) {
     var ctrl = null, timer = null;
@@ -379,6 +380,74 @@
     });
   }
 
+  /* --------------------------------------------------------------------------
+     SEPA — Scottish gauges
+
+     Scotland publishes level, not flow, through a KiWIS endpoint. It is open
+     and CORS-enabled, its records reach back to 1997, and it accepts many
+     timeseries ids in one request — so the current level of every run in the
+     catalogue costs a single call rather than one per river.
+     ------------------------------------------------------------------------ */
+  function kiwis(params, ms) {
+    var u = SEPA + '?service=kisters&type=queryServices&datasource=0&format=json&' + params;
+    return getJSON(u, ms || 30000);
+  }
+
+  /* Latest reading for many timeseries at once. Chunked, because the query
+     string is the limiting factor rather than the server. */
+  function sepaLatest(tsIds, chunkSize) {
+    var chunks = [], size = chunkSize || 40;
+    for (var i = 0; i < tsIds.length; i += size) chunks.push(tsIds.slice(i, i + size));
+    return Promise.all(chunks.map(function (c) {
+      return kiwis('request=getTimeseriesValues&ts_id=' + c.join(',')
+                   + '&period=PT2H&returnfields=Timestamp,Value', 45000)
+        .catch(function () { return []; });
+    })).then(function (parts) {
+      var out = {};
+      parts.forEach(function (rows) {
+        (rows || []).forEach(function (r) {
+          var d = r.data || [];
+          for (var k = d.length - 1; k >= 0; k--) {
+            if (typeof d[k][1] === 'number') { out[r.ts_id] = { t: d[k][0], v: d[k][1] }; break; }
+          }
+        });
+      });
+      return out;
+    });
+  }
+
+  /* Recent history for one timeseries, for the run detail chart. */
+  function sepaSeries(tsId, days) {
+    return kiwis('request=getTimeseriesValues&ts_id=' + encodeURIComponent(tsId)
+                 + '&period=P' + (days || 7) + 'D&returnfields=Timestamp,Value', 45000)
+      .then(function (rows) {
+        var d = ((rows || [])[0] || {}).data || [];
+        return d.filter(function (x) { return typeof x[1] === 'number'; })
+                .map(function (x) { return { t: x[0], v: x[1] }; });
+      });
+  }
+
+  /* Every latest level reading in England and Wales in one document. It is
+     about 1.3 MB and takes a couple of seconds, which beats 114 round trips
+     from a phone on a riverbank by a wide margin. Filtered against the station
+     references we actually care about. */
+  function eaLatestLevels(wanted) {
+    return getJSON(EA_FLD + '/data/readings?latest&parameter=level&_limit=10000', 60000)
+      .then(function (d) {
+        var out = {};
+        (d.items || []).forEach(function (it) {
+          if (typeof it.value !== 'number') return;
+          var mid = String(it.measure && (it.measure['@id'] || it.measure) || '').split('/').pop();
+          var ref = mid.split('-')[0];
+          if (!ref || (wanted && !wanted[ref])) return;
+          /* prefer plain stage over downstream-stage and other qualifiers */
+          if (out[ref] && /downstage|groundwater/i.test(mid)) return;
+          out[ref] = { t: it.dateTime, v: it.value };
+        });
+        return out;
+      });
+  }
+
   root.RiverData = {
     getJSON: getJSON, iso: iso, daysAgo: daysAgo, haversine: haversine,
     searchStations: searchStations, stationByGuid: stationByGuid,
@@ -387,6 +456,8 @@
     catchmentPoints: catchmentPoints, pointCountFor: pointCountFor,
     historicForcing: historicForcing,
     liveForcing: liveForcing, forecastForcing: forecastForcing,
+    kiwis: kiwis, sepaLatest: sepaLatest, sepaSeries: sepaSeries,
+    eaLatestLevels: eaLatestLevels,
     ensembleRain: ensembleRain
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.RiverData;

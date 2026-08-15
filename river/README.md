@@ -8,26 +8,72 @@ UK river levels with four machine-learning models (linear regression, SVR, MLP a
 LSTM) driven by point rainfall forecasts. This takes a different route to the same
 problem, and the reasoning is below.
 
-## Why not just fit an ML model
+## How this compares to an ML approach
 
-Nothing is wrong with an LSTM on a river. The problems are practical:
+**There is no head-to-head against RiverPredictor.** The two have never been run side by
+side, and anyone claiming one is better than the other without that comparison is guessing.
 
-- **It cannot use the reading in front of you.** A network trained offline produces the
-  same answer whether the gauge currently agrees with it or not. Operational flood
-  forecasting has used state updating for forty years because it is the single biggest
-  short-range win available. Measured here: anchoring on the live gauge cuts six-hour
-  error on the Severn from 26.5 to 5.2 m³/s.
-- **It has no state.** 30 mm of rain on baked August ground and on saturated January
-  ground do completely different things. A model whose inputs are recent rainfall has to
-  infer catchment wetness from the rainfall itself; a model with a soil-moisture store
-  just carries it.
-- **It cannot extrapolate.** The flood you care about is bigger than anything in the
-  training record, which is exactly where a statistical fit has nothing to stand on. A
-  store-and-routing model is bounded by mass balance instead.
-- **One number is the wrong output.** "Probably 12 m³/s" is not a decision. "62% chance
-  of being in your band on Saturday morning" is.
-- **RMSE hides the failure.** A model that predicts something near the mean scores
-  respectably on RMSE and never calls a rise. Scoring on KGE stops that.
+It does publish accuracy, per river, which an earlier version of this file wrongly said it
+did not — `api/accuracy.php` backs an Accuracy Report on every river page. For the Einig
+over a 30-day window: mean absolute error 0.010 m at one hour rising to 0.060 m at six,
+with a "correct" rate of 99.3% falling to 92.3%. Those are good numbers and more
+transparency than most such apps offer.
+
+Two things make them hard to compare against anything here. Its horizon is **1–6 hours**;
+this app forecasts five days, which is a different product answering a different question.
+And the figures carry no baseline, so there is no way to tell how much of that 0.06 m is
+the model working and how much is the river simply not moving much in six hours — the
+exact trap this app's own trust panel was in until persistence was added to it.
+
+What can be measured is the *approach*. Below, a ridge regression on lagged catchment
+rainfall — the class of thing RiverPredictor's linear/SVR/MLP models are, though weaker
+than its LSTM — trained on the same data, the same 60/40 split, the same target, and
+scored on the same held-out days. MAE at +1 day, m³/s, lower is better:
+
+| | Dart, 248 km² | Kent, 209 km² | Severn, 4325 km² |
+|---|---|---|---|
+| persistence ("no change") | 5.82 | 5.57 | 10.24 |
+| ridge, rainfall only | 7.68 | 4.56 | 28.28 |
+| conceptual, no assimilation | 4.59 | 3.39 | 27.41 |
+| ridge, rainfall + current level | 4.72 | 3.18 | 12.87 |
+| **conceptual + assimilation** | **3.70** | **2.92** | **11.23** |
+
+Read that honestly. The conceptual model wins on all three, but by 8–22%, not by a mile —
+and a *linear regression* given the current gauge reading gets most of the way there. An
+LSTM would likely do better than this baseline. The gap between the two approaches is much
+smaller than the gap between using the live reading and not using it.
+
+### Two things the earlier version of this file got wrong
+
+- It claimed a machine-learned model "cannot use the reading in front of you". That is
+  false: feed the current level in as a feature and it does. The rows above show exactly
+  how much that is worth — on the Severn it takes the statistical model from 28.28 to
+  12.87. What is fairly claimed is narrower: rescaling physical stores is a more
+  self-consistent way of applying that information than an autoregressive input, and it
+  keeps working when the gauge drops out.
+- It claimed such a model "has no state". An LSTM's cell state is the entire point of the
+  architecture, and published work finds it tracks catchment wetness closely. The honest
+  distinction is that the state here is *interpretable and directly manipulable* — it can
+  be warm-started from a known flow and rescaled onto a live reading — not that the other
+  has none.
+
+### What does hold up
+
+- **Extrapolation.** The flood you care about is bigger than anything in the training
+  record, which is where a statistical fit has least to stand on. A store-and-routing model
+  is bounded by mass balance instead. Untested here — by definition it needs an event
+  larger than the record.
+- **One number is the wrong output.** "Probably 12 m³/s" is not a decision. "62% chance of
+  being in your band on Saturday morning" is.
+- **Scoring on KGE rather than RMSE.** RMSE lets a model sit near the mean, never call a
+  rise, and still score respectably.
+
+### Where this is plainly worse
+
+- **Coverage.** England only. RiverPredictor covers Wales and Scotland too, which is most
+  of the good whitewater.
+- **Maturity.** RiverPredictor is a finished, maintained app with real users. This is days
+  old and has been run against about five gauges by its author.
 
 ## What it does
 
@@ -49,6 +95,171 @@ Then, on every open:
    spread rather than an error bar bolted onto a single line.
 7. **Verifies itself** — a rolling-origin hindcast over the last fortnight at the gauge,
    scored against persistence and climatology, shown in the app.
+8. **Writes the forecast down**, and scores it later against what the river did.
+
+## Each river back-tests against itself
+
+Before the first forecast is shown, every gauge is validated against its own record.
+Two separate questions, easy to conflate:
+
+**Has the calibration just memorised the record?** Split-sample: fit the parameters on the
+first 60% of the record, score them on the later 40% the optimiser never saw. On the Dart
+that is KGE 0.92 → 0.95 (no loss). On the Severn it is 0.94 → 0.73, which says plainly
+that the in-sample number flatters itself, and the app says so.
+
+**How well does it actually forecast?** A rolling-origin back-test across the whole
+record — every day, assimilate what the gauge read, forecast five days, compare. 536–539
+forecasts per gauge, spanning every flood and drought in two years rather than whatever
+the last fortnight contained.
+
+Results are broken down **by flow regime**, and that is the part that matters on the day:
+
+| Gauge | low water | middling | high water |
+|---|---|---|---|
+| Dart at Austins Bridge | +21% | +44% | +47% |
+| Severn at Bewdley | **−22%** | +22% | +18% |
+
+Skill against "no change" at one day. The Severn's low-water number is negative: on a flat
+summer recession the model is *worse* than assuming nothing changes. Averaged across all
+conditions that gauge scores +16% at one day and the failure disappears. The app reads off
+the regime the river is in right now and says which of those applies — on the Severn today
+it prints "believe the gauge over the forecast."
+
+### What the back-test changes
+
+It is not just reporting. Three things feed back into the model:
+
+- **Assimilation weight.** How hard to pull the model onto the live gauge reading is not a
+  constant. The back-test sweeps it and each river picks its own: the Dart takes 100%, the
+  Kent and Severn 75%. On the Severn, no anchoring at all scores −8% against persistence
+  and the tuned weight scores +28%.
+- **Fan width.** Per-lead error comes from two years of the river's own forecasts rather
+  than a fortnight of whatever the weather was doing.
+- **Which numbers to believe.** Where split-sample shows a large drop, the app points the
+  user at the back-test rather than the calibration score.
+
+The whole thing runs in the worker on data already downloaded — the back-test itself takes
+about 50 ms, the split-sample fit about 2 s — and is cached for 45 days alongside the
+calibration.
+
+## The forecast archive
+
+Every forecast the app issues is stored in IndexedDB — the 10th/50th/90th percentiles at
+each hourly lead, the gauge reading at issue, and which calibration produced it. On each
+subsequent open, any forecast whose valid times now sit inside the observed window is
+scored against the live 15-minute record, which the app has already fetched, so
+verification costs nothing over the wire.
+
+This matters because it measures a different thing from the hindcast. A hindcast replays
+the model with the rainfall already known; it never pays for the rain forecast being
+wrong, which by day two or three is the dominant error. The archive is the only number in
+the app that has paid for it, and it is always the worse of the two. Both are shown, and
+labelled for what they are.
+
+The loop closes on the **ensemble spread**. Ensembles are typically under-dispersed: the
+stated 80% band contains the outcome rather less than 80% of the time, and no amount of
+hindcasting reveals it. The archive measures the coverage directly and rescales the band
+by the factor the record says it was short by.
+
+That correction is deliberately asymmetric and shrunk toward 1 by sample size:
+
+- Shrinkage `raw^(n/(n+25))` — ten forecasts is a hint, not a measurement.
+- Widening allowed up to 3×; **tightening capped at 0.85×**. A band that turns out too
+  narrow is the failure that puts someone on the water in the wrong conditions. A band
+  that turns out too wide only ever costs a little false caution. The app would rather
+  look uncertain than be wrong quietly.
+- Nothing is applied until at least 12 forecasts have fully matured.
+
+Records are capped at 250 per gauge, one per gauge per hour, a few KB each. **Export the
+record** hands the whole archive over as JSON via the iOS share sheet, so it can come off
+the phone and be analysed or pooled.
+
+### What it does not yet do
+
+The archive is per-device and only covers gauges you actually open, so it cannot feed a
+cross-river recalibration — that needs the exported records pooled somewhere. The obvious
+next uses of a pooled archive: trigger recalibration when bias drifts (a shifted rating,
+a new abstraction), and A/B the model variants against real issued forecasts rather than
+hindcasts.
+
+Note the division of labour: the per-river back-test covers two years and every regime,
+but replays with rainfall known. The live archive is small and slow to accumulate, but it
+is the only thing that pays for the rain forecast being wrong. Neither substitutes for the
+other, so the app shows both, labelled.
+
+## Design
+
+One scale for type, one for space, one for radius, one semantic colour ramp, defined once
+at the top of `index.html`. Every screen is assembled from six components — surface,
+eyebrow/title/meta, pill, chip, meter, list-row — so the Runs list, the gauge picker and
+the forecast page read as one app rather than three that grew separately.
+
+The **level ramp** (scrape → low → medium → high → very high → huge) is the only
+decorative colour decision in the app. It lives in `runs.js` as a single map and is reused
+by the band pill, the band meter, the map pins and the run detail ladder, so those cannot
+drift apart about what "medium" looks like.
+
+The **band meter** is the signature element: the run's own calibration ladder drawn to
+scale with the reading marked on it. It says more than a percentage does — you can see how
+much more water a run needs to come into condition, and how much would push it out again.
+
+Map pins are teardrops rather than circles. Circles read as data points; a run is a place.
+
+Basemap tiles come from Carto, not OpenStreetMap's own servers, which refuse application
+traffic under their tile usage policy and say so on the tiles themselves. The muted styling
+also lets the coloured pins carry the map instead of competing with a street map.
+
+## Named runs
+
+The rest of this app derives "runnable" from a gauge's own flow duration curve, because for
+most rivers nobody has written down what good water actually is. Two open catalogues have:
+
+| Source | Licence | Sections | Gauges |
+|---|---|---|---|
+| [Where's the Water](https://github.com/jriddell/wheres-the-water) (Scottish Canoe Association) | CC-BY-SA 4.0 | 122 | SEPA |
+| [Rainchasers](https://github.com/robtuley/rainchasers) (Rob Tuley) | MIT | 114 | EA (RLOI) |
+
+Both carry the levels paddlers actually use — scrape, low, medium, high, very high, huge —
+plus grades, put-in and take-out and descriptions. That is knowledge no amount of statistics
+recovers, and it is properly open.
+
+**236 runs in `sections.json`** (160 KB, 222 with usable bands). The Rainchasers records
+carry Environment Agency RLOI gauge ids, resolved at build time to hydrology stations, so
+the phone ships a static file and does no joining.
+
+### 53 runs are fully forecastable
+
+Where the resolved gauge has both a flow record and a published catchment area, the whole
+model runs on it. Tap **Forecast this run** and the five-day ensemble forecast is scored
+against that section's own paddler levels rather than a flow percentile: the thresholds are
+in metres, so they are converted to flow through the rating curve fitted for that gauge.
+That conversion is the reason the model predicts flow and converts at the end rather than
+predicting stage directly.
+
+For the Tees at Cotherstone, medium (0.70 m) becomes 10.6 m³/s and huge (1.80 m) becomes
+115 m³/s — against a gauge whose Q20 is 10.3 m³/s, so "medium" starts right about the
+wettest fifth of days, which is what a grade 2 run wanting decent water should look like.
+
+The rest show live level against the bands but no forecast: Scottish gauges because SEPA
+publishes stage rather than flow, and some English ones because the gauge has no flow record
+or catchment area.
+
+### Handling notes
+
+- Both catalogues carry author-written HTML. It is stripped to text at build time rather
+  than injected into the page.
+- 11 sections carry notes about trees, wires, weirs or sewage releases; those get a banner
+  rather than a footnote. Hazard detection runs only on the SCA notes field, which is a
+  hazard-reporting field — an earlier version also ran it over Rainchasers' *directions*,
+  and cheerfully labelled "take out above the big weir" as a reported hazard.
+
+### Why Scotland still can't be forecast
+
+The model works in flow, where mass balance is additive, and converts to metres through a
+rating fitted from paired EA level/flow records. SEPA has no flow record to fit against, and
+publishes no catchment areas. Forecasting Scottish runs needs a second calibration path:
+absorb catchment area into a scale parameter and fit a monotone stage-discharge transform
+jointly during calibration, scoring KGE on stage.
 
 ## Model structure
 
