@@ -8,26 +8,72 @@ UK river levels with four machine-learning models (linear regression, SVR, MLP a
 LSTM) driven by point rainfall forecasts. This takes a different route to the same
 problem, and the reasoning is below.
 
-## Why not just fit an ML model
+## How this compares to an ML approach
 
-Nothing is wrong with an LSTM on a river. The problems are practical:
+**There is no head-to-head against RiverPredictor.** The two have never been run side by
+side, and anyone claiming one is better than the other without that comparison is guessing.
 
-- **It cannot use the reading in front of you.** A network trained offline produces the
-  same answer whether the gauge currently agrees with it or not. Operational flood
-  forecasting has used state updating for forty years because it is the single biggest
-  short-range win available. Measured here: anchoring on the live gauge cuts six-hour
-  error on the Severn from 26.5 to 5.2 m³/s.
-- **It has no state.** 30 mm of rain on baked August ground and on saturated January
-  ground do completely different things. A model whose inputs are recent rainfall has to
-  infer catchment wetness from the rainfall itself; a model with a soil-moisture store
-  just carries it.
-- **It cannot extrapolate.** The flood you care about is bigger than anything in the
-  training record, which is exactly where a statistical fit has nothing to stand on. A
-  store-and-routing model is bounded by mass balance instead.
-- **One number is the wrong output.** "Probably 12 m³/s" is not a decision. "62% chance
-  of being in your band on Saturday morning" is.
-- **RMSE hides the failure.** A model that predicts something near the mean scores
-  respectably on RMSE and never calls a rise. Scoring on KGE stops that.
+It does publish accuracy, per river, which an earlier version of this file wrongly said it
+did not — `api/accuracy.php` backs an Accuracy Report on every river page. For the Einig
+over a 30-day window: mean absolute error 0.010 m at one hour rising to 0.060 m at six,
+with a "correct" rate of 99.3% falling to 92.3%. Those are good numbers and more
+transparency than most such apps offer.
+
+Two things make them hard to compare against anything here. Its horizon is **1–6 hours**;
+this app forecasts five days, which is a different product answering a different question.
+And the figures carry no baseline, so there is no way to tell how much of that 0.06 m is
+the model working and how much is the river simply not moving much in six hours — the
+exact trap this app's own trust panel was in until persistence was added to it.
+
+What can be measured is the *approach*. Below, a ridge regression on lagged catchment
+rainfall — the class of thing RiverPredictor's linear/SVR/MLP models are, though weaker
+than its LSTM — trained on the same data, the same 60/40 split, the same target, and
+scored on the same held-out days. MAE at +1 day, m³/s, lower is better:
+
+| | Dart, 248 km² | Kent, 209 km² | Severn, 4325 km² |
+|---|---|---|---|
+| persistence ("no change") | 5.82 | 5.57 | 10.24 |
+| ridge, rainfall only | 7.68 | 4.56 | 28.28 |
+| conceptual, no assimilation | 4.59 | 3.39 | 27.41 |
+| ridge, rainfall + current level | 4.72 | 3.18 | 12.87 |
+| **conceptual + assimilation** | **3.70** | **2.92** | **11.23** |
+
+Read that honestly. The conceptual model wins on all three, but by 8–22%, not by a mile —
+and a *linear regression* given the current gauge reading gets most of the way there. An
+LSTM would likely do better than this baseline. The gap between the two approaches is much
+smaller than the gap between using the live reading and not using it.
+
+### Two things the earlier version of this file got wrong
+
+- It claimed a machine-learned model "cannot use the reading in front of you". That is
+  false: feed the current level in as a feature and it does. The rows above show exactly
+  how much that is worth — on the Severn it takes the statistical model from 28.28 to
+  12.87. What is fairly claimed is narrower: rescaling physical stores is a more
+  self-consistent way of applying that information than an autoregressive input, and it
+  keeps working when the gauge drops out.
+- It claimed such a model "has no state". An LSTM's cell state is the entire point of the
+  architecture, and published work finds it tracks catchment wetness closely. The honest
+  distinction is that the state here is *interpretable and directly manipulable* — it can
+  be warm-started from a known flow and rescaled onto a live reading — not that the other
+  has none.
+
+### What does hold up
+
+- **Extrapolation.** The flood you care about is bigger than anything in the training
+  record, which is where a statistical fit has least to stand on. A store-and-routing model
+  is bounded by mass balance instead. Untested here — by definition it needs an event
+  larger than the record.
+- **One number is the wrong output.** "Probably 12 m³/s" is not a decision. "62% chance of
+  being in your band on Saturday morning" is.
+- **Scoring on KGE rather than RMSE.** RMSE lets a model sit near the mean, never call a
+  rise, and still score respectably.
+
+### Where this is plainly worse
+
+- **Coverage.** England only. RiverPredictor covers Wales and Scotland too, which is most
+  of the good whitewater.
+- **Maturity.** RiverPredictor is a finished, maintained app with real users. This is days
+  old and has been run against about five gauges by its author.
 
 ## What it does
 
