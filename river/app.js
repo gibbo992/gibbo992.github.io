@@ -21,6 +21,11 @@
     status: '',
     error: null,
     search: [],
+    runFilter: 'all',
+    runQ: '',
+    openRun: null,
+    runsBusy: false,
+    runsErr: null,
     lastGuid: load('rp.last', null)
   };
 
@@ -419,6 +424,7 @@
       b.classList.toggle('on', b.getAttribute('data-tab') === S.tab);
     });
     if (S.tab === 'pick') return renderPick();
+    if (S.tab === 'runs') return renderRuns();
     if (S.tab === 'model') return renderModel();
     return renderNow();
   }
@@ -848,6 +854,113 @@
       + '</div>';
   }
 
+  /* ---- runs tab ----------------------------------------------------------- */
+  function renderRuns() {
+    if (S.openRun) return renderRunDetail();
+
+    var h = '<div class="card"><div class="lab">Named runs · Scotland</div>'
+      + '<p class="muted">122 sections with the levels paddlers actually use, from the Scottish Canoe Association’s '
+      + '<a href="https://www.canoescotland.org/go-paddling/wheres-the-water" target="_blank" rel="noopener">Where’s the Water</a>. '
+      + 'These are <b>observed levels, not forecasts</b> — Scotland publishes stage rather than flow, and the model needs a different calibration to predict it.</p>'
+      + '<input class="inp" id="rq" placeholder="Search a river — “Etive”, “Findhorn”" value="' + esc(S.runQ) + '">'
+      + '<div class="chips" style="margin-top:10px">'
+      + [['all','All'],['on','Running now'],['low','Low'],['big','Big']].map(function (o) {
+          return '<button class="chip' + (S.runFilter === o[0] ? ' on' : '') + '" data-rf="' + o[0] + '">' + o[1] + '</button>';
+        }).join('')
+      + '</div></div>';
+
+    if (S.runsBusy) return void (A.innerHTML = h + '<div class="card"><div class="spin"></div><div class="muted">Reading ' + (RiverRuns.all().length || 122) + ' Scottish gauges…</div></div>');
+    if (S.runsErr)  return void (A.innerHTML = h + '<div class="card err"><b>Couldn’t reach SEPA</b><p class="muted">' + esc(S.runsErr) + '</p></div>');
+
+    var list = RiverRuns.all().filter(function (r) {
+      if (S.runQ && r.s.name.toLowerCase().indexOf(S.runQ.toLowerCase()) < 0) return false;
+      if (S.runFilter === 'all') return true;
+      if (!r.cls) return false;
+      if (S.runFilter === 'on')  return ['medium', 'high'].indexOf(r.cls.cat) >= 0;
+      if (S.runFilter === 'low') return ['tooLow', 'scrape', 'low'].indexOf(r.cls.cat) >= 0;
+      if (S.runFilter === 'big') return ['veryHigh', 'huge'].indexOf(r.cls.cat) >= 0;
+      return true;
+    });
+
+    /* runs that are in should surface first, then everything else by name */
+    var rank = { medium: 0, high: 1, veryHigh: 2, low: 3, scrape: 4, huge: 5, tooLow: 6 };
+    list.sort(function (a, b) {
+      var ra = a.cls ? rank[a.cls.cat] : 9, rb = b.cls ? rank[b.cls.cat] : 9;
+      return ra !== rb ? ra - rb : (a.s.name < b.s.name ? -1 : 1);
+    });
+
+    var on = RiverRuns.all().filter(function (r) { return r.cls && ['medium', 'high'].indexOf(r.cls.cat) >= 0; }).length;
+    h += '<div class="lab2">' + list.length + ' shown · ' + on + ' in medium or high right now</div>';
+
+    if (!list.length) h += '<div class="card"><p class="muted">Nothing matches.</p></div>';
+    list.forEach(function (r) { h += runRow(r); });
+
+    h += '<div class="card small"><p class="muted">' + esc(RiverRuns.meta() ? RiverRuns.meta().attribution : '') + '</p>'
+      + '<p class="muted">Shared under <a href="https://creativecommons.org/licenses/by-sa/4.0" target="_blank" rel="noopener">CC-BY-SA 4.0</a>.</p></div>';
+    A.innerHTML = h;
+  }
+
+  function runRow(r) {
+    var lv = r.level != null ? r.level.toFixed(2) + ' m' : '—';
+    var cls = r.cls;
+    var frac = r.s.bands ? RiverRuns.fraction(r.level, r.s.bands) : 0;
+    return '<div class="srow run" data-run="' + esc(r.s.slug) + '">'
+      + '<div class="sinfo"><div class="sn2">' + esc(r.s.name) + '</div>'
+      + '<div class="sm">' + (r.s.grade ? 'Grade ' + esc(r.s.grade) + ' · ' : '') + lv
+      + (isHazard(r.s.notes) || isHazard(r.s.access) ? ' · <b class="hz">hazard noted</b>' : '') + '</div>'
+      + (r.s.bands ? '<div class="lvbar"><i style="width:' + Math.round(frac * 100) + '%"></i></div>' : '')
+      + '</div>'
+      + '<div class="stag ' + (cls ? 'tone-' + cls.tone : 'part') + '">' + (cls ? esc(cls.label) : 'no reading') + '</div>'
+      + '</div>';
+  }
+
+  function renderRunDetail() {
+    var r = RiverRuns.bySlug(S.openRun);
+    if (!r) { S.openRun = null; return renderRuns(); }
+    var s = r.s, b = s.bands;
+    var h = '<div class="card head-card"><div class="riv">Scotland</div>'
+      + '<div class="stn">' + esc(s.name) + '</div>'
+      + '<div class="meta">' + (s.grade ? 'Grade ' + esc(s.grade) + ' · ' : '') + esc(s.gauge || '') + '</div>'
+      + '<div class="acts"><button class="btn" data-act="backruns">← All runs</button>'
+      + (s.putIn ? '<a class="btn go" href="https://waze.com/ul?ll=' + s.putIn[0] + ',' + s.putIn[1] + '&navigate=yes" target="_blank" rel="noopener">Put-in</a>' : '')
+      + (s.takeOut ? '<a class="btn" href="https://waze.com/ul?ll=' + s.takeOut[0] + ',' + s.takeOut[1] + '&navigate=yes" target="_blank" rel="noopener">Take-out</a>' : '')
+      + (s.guidebook ? '<a class="btn" href="' + esc(s.guidebook) + '" target="_blank" rel="noopener">Guidebook ↗</a>' : '')
+      + '</div></div>';
+
+    h += '<div class="card verdict ' + (r.cls ? r.cls.tone : 'na') + '"><div class="vrow"><div>'
+      + '<div class="lab">Gauge reading</div>'
+      + '<div class="big">' + (r.level != null ? r.level.toFixed(2) + ' m' : '—') + '</div>'
+      + '<div class="sub">' + (r.at ? esc(shortTime(r.at)) : 'no recent reading') + '</div></div>'
+      + '<div class="badge ' + (r.cls ? r.cls.tone : '') + '">' + (r.cls ? esc(r.cls.label) : '—') + '</div></div>'
+      + '<p class="muted">This is what the gauge says now, not a forecast.</p></div>';
+
+    if (b) {
+      h += '<div class="card"><div class="lab">Paddler levels</div><div class="ladder">';
+      RiverRuns.CAT.forEach(function (k) {
+        if (b[k] == null) return;
+        var hit = r.cls && r.cls.cat === k;
+        h += '<div class="rung' + (hit ? ' on' : '') + '"><span class="rk">' + esc(RiverRuns.CAT_LABEL[k]) + '</span>'
+          + '<span class="rv">' + b[k].toFixed(2) + ' m</span></div>';
+      });
+      h += '</div><p class="muted">Thresholds recorded by paddlers for this section, not derived from statistics.</p></div>';
+    }
+
+    /* Paddler notes carry things that matter more than the level does — trees,
+       wires, weirs, sewage releases. Those get a banner, not a footnote. */
+    var haz = [s.notes, s.access].filter(Boolean).filter(function (t) { return isHazard(t); });
+    haz.forEach(function (t) {
+      h += '<div class="card hazard"><div class="lab">Reported hazard</div><p>' + esc(t) + '</p></div>';
+    });
+    if (s.access && haz.indexOf(s.access) < 0) h += '<div class="card"><div class="lab">Access</div><p class="muted">' + esc(s.access) + '</p></div>';
+    if (s.notes && haz.indexOf(s.notes) < 0)  h += '<div class="card"><div class="lab">Notes</div><p class="muted">' + esc(s.notes) + '</p></div>';
+
+    h += '<div class="card small"><p class="muted">' + esc(RiverRuns.meta() ? RiverRuns.meta().attribution : '') + '</p></div>';
+    A.innerHTML = h;
+  }
+
+  var HAZARD = /\b(tree|trees|wire|wires|fence|strainer|weir|sewage|siphon|blockage|do not paddle|portage|dead|log ?jam|barbed)\b/i;
+  function isHazard(t) { return HAZARD.test(t || ''); }
+
   /* ---- model tab --------------------------------------------------------- */
   function renderModel() {
     var r = S.result;
@@ -1001,7 +1114,18 @@
 
   document.addEventListener('click', function (ev) {
     var tabBtn = ev.target.closest('.tab');
-    if (tabBtn) { S.tab = tabBtn.getAttribute('data-tab'); render(); return; }
+    if (tabBtn) {
+      S.tab = tabBtn.getAttribute('data-tab');
+      if (S.tab === 'runs') loadRuns();
+      render();
+      return;
+    }
+
+    var runRowEl = ev.target.closest('.srow.run');
+    if (runRowEl) { S.openRun = runRowEl.getAttribute('data-run'); render(); return; }
+
+    var rf = ev.target.closest('[data-rf]');
+    if (rf) { S.runFilter = rf.getAttribute('data-rf'); render(); return; }
 
     var row = ev.target.closest('.srow');
     if (row) {
@@ -1020,6 +1144,7 @@
     else if (act === 'near') doNear();
     else if (act === 'refresh' && S.station) openStation(S.station);
     else if (act === 'export') doExport(b);
+    else if (act === 'backruns') { S.openRun = null; render(); }
     else if (act === 'fav' && S.station) {
       if (isFav(S.station.guid)) S.favs = S.favs.filter(function (f) { return f.guid !== S.station.guid; });
       else S.favs = S.favs.concat([S.station]);
@@ -1033,6 +1158,7 @@
 
   document.addEventListener('input', function (e) {
     if (e.target.id === 'q') { S.q = e.target.value; return; }
+    if (e.target.id === 'rq') { S.runQ = e.target.value; renderRuns(); return; }
     if (!S.result) return;
     if (e.target.id === 'blo' || e.target.id === 'bhi') {
       var r = S.result;
@@ -1076,6 +1202,19 @@
     } catch (e) {}
     try { await navigator.clipboard.writeText(json); btn.textContent = 'Copied to clipboard'; }
     catch (e) { btn.textContent = 'Export unavailable'; }
+  }
+
+  async function loadRuns() {
+    if (RiverRuns.fetchedAt()) return;
+    S.runsBusy = true; S.runsErr = null;
+    try {
+      await RiverRuns.load();
+      render();                       /* show the list while levels arrive */
+      await RiverRuns.refresh();
+    } catch (e) {
+      S.runsErr = String(e && e.message || e);
+    }
+    S.runsBusy = false; render();
   }
 
   async function doSearch() {

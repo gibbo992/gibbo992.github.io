@@ -7,7 +7,8 @@ const APP = 'riverwise-v1';
 const API = 'riverwise-api-v1';
 const SHELL = [
   './', './index.html', './manifest.webmanifest',
-  './model.js', './data.js', './archive.js', './app.js', './worker.js',
+  './model.js', './data.js', './archive.js', './runs.js', './app.js', './worker.js',
+  './sections.json',
   './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png'
 ];
 

@@ -145,6 +145,30 @@ table.verif td.bad{color:var(--bad);font-weight:700}
 .rg .rgv.bad{color:var(--bad)}
 .rg .rgn{font-size:9.5px;color:var(--sub)}
 
+/* runs */
+.srow.run{cursor:pointer}
+.lvbar{height:4px;background:var(--paper);border-radius:999px;margin-top:7px;overflow:hidden}
+.lvbar>i{display:block;height:100%;background:var(--accent);border-radius:999px;min-width:2px}
+.stag.tone-good{background:var(--accent-tint);color:var(--accent-ink)}
+.stag.tone-low{background:var(--paper);color:var(--sub)}
+.stag.tone-warn{background:#f6e6d2;color:#a2670f}
+.stag.tone-bad{background:#f7dcd5;color:#9c3419}
+.stag.tone-na{background:var(--paper);color:var(--sub)}
+@media (prefers-color-scheme: dark){
+  .stag.tone-warn{background:#3d2e1a;color:#e5b06b}
+  .stag.tone-bad{background:#3d201a;color:#f0937a}
+}
+.verdict.na .big{color:var(--sub)}
+.ladder{display:flex;flex-direction:column;gap:3px}
+.rung{display:flex;align-items:center;justify-content:space-between;padding:9px 11px;border-radius:8px;background:var(--paper);font-size:13px}
+.rung.on{background:var(--accent);color:#fff;font-weight:700}
+.rung .rk{letter-spacing:.2px}
+.rung .rv{font-family:var(--mono);font-size:12.5px}
+.card.hazard{border-left:3px solid var(--warn);background:var(--card)}
+.card.hazard p{font-size:13.5px;line-height:1.5;margin:0;color:var(--ink)}
+.card.hazard .lab{color:var(--warn)}
+.hz{color:var(--warn)}
+
 .spin{width:20px;height:20px;border:2.5px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:sp .8s linear infinite;margin-bottom:9px}
 @keyframes sp{to{transform:rotate(360deg)}}
 
@@ -166,11 +190,13 @@ table.verif td.bad{color:var(--bad);font-weight:700}
 <div class="tabs">
   <button class="tab on" data-tab="now"><svg viewBox="0 0 24 24"><path d="M3 15c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/><path d="M3 9c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/></svg><span>Forecast</span></button>
   <button class="tab" data-tab="pick"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><span>Rivers</span></button>
+  <button class="tab" data-tab="runs"><svg viewBox="0 0 24 24"><path d="M5 3v13a4 4 0 0 0 8 0V8a3 3 0 0 1 6 0v13"/><path d="M2 20h6M16 3h6"/></svg><span>Runs</span></button>
   <button class="tab" data-tab="model"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16"/><path d="M7 15l4-5 3 3 5-7"/></svg><span>Model</span></button>
 </div>
 
 <script src="model.js"></script>
 <script src="data.js"></script>
 <script src="archive.js"></script>
+<script src="runs.js"></script>
 <script src="app.js"></script>
 </body></html>

@@ -187,6 +187,39 @@ but replays with rainfall known. The live archive is small and slow to accumulat
 is the only thing that pays for the rain forecast being wrong. Neither substitutes for the
 other, so the app shows both, labelled.
 
+## Named runs (Scotland)
+
+The rest of this app derives "runnable" from a gauge's own flow duration curve, because
+for most rivers nobody has written down what good water actually is. For Scotland somebody
+has. The Scottish Canoe Association's [Where's the Water](https://github.com/jriddell/wheres-the-water)
+publishes 122 sections under CC-BY-SA 4.0 with the levels paddlers actually use — scrape,
+low, medium, high, very high, huge — plus grades, put-in and take-out, guidebook links, and
+free-text notes.
+
+That is knowledge no amount of statistics recovers, and it is properly open. It is vendored
+into `sections.json` (52 KB, 108 of 122 with usable bands) and shown against live SEPA
+readings. SEPA's KiWIS endpoint is open, CORS-enabled, reaches back to 1997, and takes many
+timeseries ids per request — the current level of all 122 runs costs one round trip, about
+a second.
+
+Two things worth noting about how the data is handled:
+
+- The SCA notes contain author-written HTML. It is stripped to text at build time rather
+  than injected into the page.
+- 14 sections carry notes about trees, wires, weirs or sewage releases. Those matter more
+  than the level does, so they are surfaced as a banner rather than a footnote.
+
+**These are observed levels, not forecasts.** Scotland publishes stage, not flow, and the
+model needs a different calibration path to predict it — see below.
+
+### Why Scotland can't just use the existing model
+
+The model works in flow, where mass balance is additive, and converts to metres through a
+rating fitted from paired EA level/flow records. SEPA has no flow record to fit against, and
+publishes no catchment areas. Forecasting Scottish runs needs a second calibration path:
+absorb catchment area into a scale parameter and fit a monotone stage-discharge transform
+jointly during calibration, scoring KGE on stage. That is the next piece of work.
+
 ## Model structure
 
 ```
