@@ -106,14 +106,14 @@
 
     /* ---- 4. calibrate (cached) ------------------------------------------- */
     var cached = load('rp.cal.' + st.guid, null);
-    var par, fit;
-    if (cached && cached.at && (Date.now() - cached.at) < CACHE_DAYS * 86400000 && cached.v === 3) {
-      par = cached.par; fit = cached.fit;
+    var par, fit, split, bt;
+    if (cached && cached.at && (Date.now() - cached.at) < CACHE_DAYS * 86400000 && cached.v === 4) {
+      par = cached.par; fit = cached.fit; split = cached.split; bt = cached.bt;
       status('Using stored calibration…');
     } else {
-      var res = await runCalibration(hist, w.obs, w.windows, st.area, status);
-      par = res.par; fit = res.fit;
-      save('rp.cal.' + st.guid, { at: Date.now(), v: 3, par: par, fit: fit });
+      var res = await runCalibration(hist, w, st.area, status);
+      par = res.par; fit = res.fit; split = res.split; bt = res.bt;
+      save('rp.cal.' + st.guid, { at: Date.now(), v: 4, par: par, fit: fit, split: split, bt: bt });
     }
 
     /* ---- 5. live forcing: recent past + deterministic forecast ----------- */
@@ -158,8 +158,13 @@
     var spin = M.simulate(spinF, par, st.area, 1, null, state0);
     var qSimNow = spin.q[spin.q.length - 1];
 
+    /* How hard to pull the model onto the live gauge reading is not a constant.
+       The river's own backtest swept it and picked the value that forecast its
+       own history best — on the Severn, no assimilation scores -8% against
+       persistence and this weight scores +28%. */
+    var daWeight = (bt && bt.weight != null) ? bt.weight : 1;
     var da = { state: spin.state, ratio: 1 };
-    if (obsNow && obsNow.v > 0) da = M.assimilate(spin.state, qSimNow, obsNow.v, par);
+    if (obsNow && obsNow.v > 0) da = M.assimilate(spin.state, qSimNow, obsNow.v, par, { weight: daWeight });
 
     /* ---- 8. ensemble forward --------------------------------------------- */
     status('Running the rainfall ensemble…');
@@ -177,7 +182,11 @@
     status('Checking recent accuracy…');
     var verif = verifyRecent(live, obsSeries, par, st.area, nowIdx);
 
-    var fc = M.ensemble(members, par, st.area, 1, da.state, verif ? verif.sigma : null);
+    /* Uncertainty by lead time. The rolling backtest spans two years and every
+       flood in them; the live hindcast spans a fortnight of whatever the
+       weather happened to be doing. Prefer the backtest, and fall back. */
+    var sigma = btSigmaHourly(bt) || (verif ? verif.sigma : null);
+    var fc = M.ensemble(members, par, st.area, 1, da.state, sigma);
 
     /* ---- 9b. score past forecasts, and let them widen or narrow this one -- */
     status('Scoring past forecasts…');
@@ -213,7 +222,7 @@
       nMembers: members.length, nPts: hist.nPts,
       pastTime: live.time.slice(0, nowIdx + 1), pastQ: spin.q,
       rainPast: live.p.slice(0, nowIdx + 1), rainFc: live.p.slice(nowIdx + 1),
-      arch: arch, spreadFactor: spreadFactor,
+      arch: arch, spreadFactor: spreadFactor, split: split, bt: bt, daWeight: daWeight,
       builtAt: Date.now()
     };
   }
@@ -230,42 +239,81 @@
     }
   }
 
-  function runCalibration(forcing, obs, windows, area, status) {
+  function runCalibration(forcing, w, area, status) {
+    var labels = {
+      calibrate: 'Fitting the model to this river',
+      split:     'Checking it hasn’t just memorised the record',
+      backtest:  'Back-testing it against two years of this river'
+    };
     return new Promise(function (resolve, reject) {
       var wk;
       try { wk = new Worker('worker.js'); }
       catch (e) {
         /* no worker (rare) — run inline and accept the pause */
-        status('Calibrating…');
-        var cal = M.calibrate(forcing, obs, windows, area, 1,
-          { pop: 32, gen: 60, warmup: Math.min(180, Math.floor(windows.length * 0.25)), seed: 7 });
-        return resolve({ par: cal.par, fit: { kge: cal.kge, nse: NaN } });
+        status('Fitting the model to this river…');
+        var cal = M.calibrate(forcing, w.obs, w.windows, area, 1,
+          { pop: 32, gen: 60, warmup: Math.min(180, Math.floor(w.windows.length * 0.25)), seed: 7 });
+        var bt = null;
+        try {
+          bt = M.backtestDaily(forcing, w.windows, w.obs, cal.par, area, 1,
+            { leadDays: 5, warmup: 180, months: w.months });
+        } catch (e3) {}
+        return resolve({ par: cal.par, fit: { kge: cal.kge, nse: NaN }, split: null,
+                         bt: bt ? { weight: bt.best.weight, nOrigins: bt.nOrigins, bounds: bt.bounds,
+                                    mae: Array.from(bt.best.mae), per: Array.from(bt.best.per),
+                                    climo: Array.from(bt.best.climo), skill: Array.from(bt.best.skill),
+                                    sigma: Array.from(bt.best.sigma),
+                                    regime: bt.best.regime, sweep: [] } : null });
       }
       wk.onmessage = function (ev) {
         var m = ev.data;
-        if (m.type === 'progress') status('Calibrating to this river — ' + Math.round(m.pct * 100) + '%');
-        else if (m.type === 'done') { wk.terminate(); resolve({ par: m.par, fit: m.fit }); }
-        else if (m.type === 'error') { wk.terminate(); reject(new Error(m.message)); }
+        if (m.type === 'progress') {
+          var lab = labels[m.phase] || 'Working';
+          status(lab + (m.phase === 'calibrate' ? ' — ' + Math.round(m.pct * 100) + '%' : '…'));
+        } else if (m.type === 'done') {
+          wk.terminate();
+          resolve({ par: m.par, fit: m.fit, split: m.split, bt: m.bt });
+        } else if (m.type === 'error') { wk.terminate(); reject(new Error(m.message)); }
       };
       wk.onerror = function (e) { wk.terminate(); reject(new Error('Calibration failed: ' + e.message)); };
-      status('Calibrating to this river…');
+      status('Fitting the model to this river…');
       wk.postMessage({ cmd: 'calibrate', p: forcing.p, t: forcing.t, e: forcing.e,
-                       obs: obs, windows: windows, area: area });
+                       obs: w.obs, windows: w.windows, months: w.months, area: area });
     });
+  }
+
+  /* The backtest measures error at daily leads; the fan needs it hourly. Hold
+     each day's value across its 24 hours rather than inventing a smooth curve
+     the data does not support. */
+  function btSigmaHourly(bt) {
+    if (!bt || !bt.sigma || !bt.sigma.length) return null;
+    var out = new Float64Array(bt.sigma.length * 24);
+    for (var i = 0; i < out.length; i++) out[i] = bt.sigma[Math.floor(i / 24)];
+    return out;
+  }
+
+  /* Which part of its own range the river is sitting in right now — the
+     backtest scores each of these separately, and they differ enormously. */
+  function regimeOf(q, bt) {
+    if (!bt || !bt.bounds) return null;
+    if (q < bt.bounds.low) return 'low';
+    if (q > bt.bounds.high) return 'high';
+    return 'mid';
   }
 
   /* Daily-mean flow is reported against a 09:00 day boundary; match it. */
   function buildWindows(time, daily) {
     var idx = {}, i;
     for (i = 0; i < time.length; i++) idx[time[i]] = i;
-    var windows = [], obs = [];
+    var windows = [], obs = [], months = [];
     for (i = 0; i < daily.length; i++) {
       var a = idx[daily[i].date + 'T09:00'];
       if (a == null || a + 24 > time.length) continue;
       windows.push([a, a + 24]);
       obs.push(daily[i].v);
+      months.push(+daily[i].date.slice(5, 7));
     }
-    return { windows: windows, obs: obs };
+    return { windows: windows, obs: obs, months: months };
   }
 
   function indexOfNow(times) {
@@ -403,6 +451,7 @@
     h += chartCard(r);
     h += windowCard(r);
     h += bandCard(r);
+    h += backtestCard(r);
     h += recordCard(r);
     h += trustCard(r);
     h += footerCard(r);
@@ -627,6 +676,92 @@
     }
     h += '<div class="acts"><button class="btn" data-act="export">Export the record</button></div>';
     return h + '</div>';
+  }
+
+  /* --------------------------------------------------------------------------
+     BACKTEST CARD
+
+     Every gauge is scored against its own two-year record, and the answer is
+     given for the regime the river is in *today*. An average across all
+     conditions is close to useless on the day: the same model can be worth 60%
+     over persistence in a flood and worse than useless on a flat summer
+     recession, and knowing which of those you are looking at right now is the
+     whole point.
+     ------------------------------------------------------------------------ */
+  function backtestCard(r) {
+    var bt = r.bt, sp = r.split;
+    var h = '<div class="card"><div class="lab">Back-tested on this river</div>';
+    if (!bt) {
+      h += '<p class="muted">Not enough record at this gauge to back-test against.</p>';
+      return h + '</div>';
+    }
+
+    var now = r.obsNow ? r.obsNow.v : r.qSimNow;
+    var reg = regimeOf(now, bt);
+    var names = { low: 'low water', mid: 'middling water', high: 'high water' };
+    var rg = reg && bt.regime && bt.regime[reg];
+
+    if (rg && rg.n > 20) {
+      var s1 = rg.skill[0], s3 = rg.skill[Math.min(2, rg.skill.length - 1)];
+      var tone = s1 > 0.2 ? 'good' : s1 > 0 ? 'ok' : 'bad';
+      h += '<p class="verdict-line ' + tone + '">Right now this river is in <b>' + names[reg] + '</b>. '
+        + 'Across ' + rg.n + ' days like today in the last two years, this model beat “no change” by '
+        + Math.round(s1 * 100) + '% at one day and ' + Math.round(s3 * 100) + '% at three'
+        + (s1 <= 0 ? ' — that is, it did not. In this regime, believe the gauge over the forecast.' : '.')
+        + '</p>';
+    }
+
+    h += '<table class="verif"><tr><th>Lead</th><th>Model</th><th>“No change”</th><th>Seasonal normal</th><th>Skill</th></tr>';
+    bt.mae.forEach(function (m, i) {
+      var sk = bt.skill[i];
+      h += '<tr><td>+' + (i + 1) + ' d</td><td>' + fmtSmall(m) + '</td><td>' + fmtSmall(bt.per[i]) + '</td>'
+        + '<td>' + fmtSmall(bt.climo[i]) + '</td>'
+        + '<td class="' + (sk > 0.05 ? 'good' : sk < -0.05 ? 'bad' : '') + '">' + (sk >= 0 ? '+' : '') + Math.round(sk * 100) + '%</td></tr>';
+    });
+    h += '</table>';
+    h += '<p class="muted">' + bt.nOrigins + ' rolling forecasts, one from every day of the record. '
+      + 'Mean absolute error in ' + (r.kind === 'flow' ? 'm³/s' : 'm') + '.</p>';
+
+    /* skill split by regime */
+    h += '<div class="regimes">';
+    ['low', 'mid', 'high'].forEach(function (k) {
+      var g = bt.regime && bt.regime[k];
+      if (!g || !g.n) return;
+      var v1 = g.skill[0];
+      h += '<div class="rg' + (k === reg ? ' on' : '') + '"><div class="rgk">' + names[k] + '</div>'
+        + '<div class="rgv ' + (v1 > 0.05 ? 'good' : v1 < -0.05 ? 'bad' : '') + '">' + (v1 >= 0 ? '+' : '') + Math.round(v1 * 100) + '%</div>'
+        + '<div class="rgn">' + g.n + ' days</div></div>';
+    });
+    h += '</div><p class="muted">Skill against “no change” at one day, by how much water the river was carrying. '
+      + 'Low-water days are where most models quietly fall apart, because a flat recession is very hard to beat.</p>';
+
+    /* split-sample honesty */
+    if (sp && isFinite(sp.kgeVal)) {
+      var drop = sp.kgeCal - sp.kgeVal;
+      h += '<div class="lab" style="margin-top:18px">Has it just memorised the record?</div>'
+        + '<p class="muted">Fitted on the first ' + sp.nCal + ' days and scored on ' + sp.nVal + ' later days it never saw: '
+        + 'KGE ' + sp.kgeCal.toFixed(2) + ' on the data it learned from, <b>' + sp.kgeVal.toFixed(2) + '</b> on data it did not.'
+        + (drop > 0.15
+            ? ' That is a real drop — the fit here flatters itself, so lean on the back-test numbers above rather than the calibration score.'
+            : ' Close enough to say it has learned the river rather than the record.')
+        + '</p>';
+    }
+
+    /* what the backtest changed */
+    if (bt.sweep && bt.sweep.length > 1) {
+      var off = bt.sweep.filter(function (x) { return x.weight === 0; })[0];
+      h += '<div class="lab" style="margin-top:18px">What it tuned</div>'
+        + '<p class="muted">The back-test swept how hard to pull the model onto the live gauge reading and chose <b>'
+        + Math.round(bt.weight * 100) + '%</b> for this river'
+        + (off ? ', against ' + Math.round(off.skill3 * 100) + '% skill with no anchoring at all' : '')
+        + '. It also sets the width of the shaded fan on the chart, from two years of its own errors rather than the last fortnight.</p>';
+    }
+    return h + '</div>';
+  }
+
+  function fmtSmall(v) {
+    if (!isFinite(v)) return '—';
+    return v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2);
   }
 
   function trustCard(r) {

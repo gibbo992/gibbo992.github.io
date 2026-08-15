@@ -51,6 +51,51 @@ Then, on every open:
    scored against persistence and climatology, shown in the app.
 8. **Writes the forecast down**, and scores it later against what the river did.
 
+## Each river back-tests against itself
+
+Before the first forecast is shown, every gauge is validated against its own record.
+Two separate questions, easy to conflate:
+
+**Has the calibration just memorised the record?** Split-sample: fit the parameters on the
+first 60% of the record, score them on the later 40% the optimiser never saw. On the Dart
+that is KGE 0.92 → 0.95 (no loss). On the Severn it is 0.94 → 0.73, which says plainly
+that the in-sample number flatters itself, and the app says so.
+
+**How well does it actually forecast?** A rolling-origin back-test across the whole
+record — every day, assimilate what the gauge read, forecast five days, compare. 536–539
+forecasts per gauge, spanning every flood and drought in two years rather than whatever
+the last fortnight contained.
+
+Results are broken down **by flow regime**, and that is the part that matters on the day:
+
+| Gauge | low water | middling | high water |
+|---|---|---|---|
+| Dart at Austins Bridge | +21% | +44% | +47% |
+| Severn at Bewdley | **−22%** | +22% | +18% |
+
+Skill against "no change" at one day. The Severn's low-water number is negative: on a flat
+summer recession the model is *worse* than assuming nothing changes. Averaged across all
+conditions that gauge scores +16% at one day and the failure disappears. The app reads off
+the regime the river is in right now and says which of those applies — on the Severn today
+it prints "believe the gauge over the forecast."
+
+### What the back-test changes
+
+It is not just reporting. Three things feed back into the model:
+
+- **Assimilation weight.** How hard to pull the model onto the live gauge reading is not a
+  constant. The back-test sweeps it and each river picks its own: the Dart takes 100%, the
+  Kent and Severn 75%. On the Severn, no anchoring at all scores −8% against persistence
+  and the tuned weight scores +28%.
+- **Fan width.** Per-lead error comes from two years of the river's own forecasts rather
+  than a fortnight of whatever the weather was doing.
+- **Which numbers to believe.** Where split-sample shows a large drop, the app points the
+  user at the back-test rather than the calibration score.
+
+The whole thing runs in the worker on data already downloaded — the back-test itself takes
+about 50 ms, the split-sample fit about 2 s — and is cached for 45 days alongside the
+calibration.
+
 ## The forecast archive
 
 Every forecast the app issues is stored in IndexedDB — the 10th/50th/90th percentiles at
@@ -90,6 +135,11 @@ cross-river recalibration — that needs the exported records pooled somewhere. 
 next uses of a pooled archive: trigger recalibration when bias drifts (a shifted rating,
 a new abstraction), and A/B the model variants against real issued forecasts rather than
 hindcasts.
+
+Note the division of labour: the per-river back-test covers two years and every regime,
+but replays with rainfall known. The live archive is small and slow to accumulate, but it
+is the only thing that pays for the rain forecast being wrong. Neither substitutes for the
+other, so the app shows both, labelled.
 
 ## Model structure
 

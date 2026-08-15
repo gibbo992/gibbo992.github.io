@@ -521,6 +521,186 @@
     return quantile(s, 0.5);
   }
 
+  /* ==========================================================================
+     BACKTESTING — each river against its own record
+
+     Two separate questions, which are easy to conflate:
+
+       1. Has the calibration overfitted?  Answered by split-sample: fit the
+          parameters on the older part of the record and score them on a later
+          part the optimiser was never allowed to see. A model that scores 0.95
+          on the data it was fitted to and 0.6 on data it wasn't has learned the
+          record, not the river.
+
+       2. How well does it FORECAST?  Answered by rolling-origin backtesting
+          across the whole record — every day, assimilate what the gauge read,
+          forecast forward, compare. That is a different question from how well
+          it reproduces the past, and it is the one the app exists to answer.
+
+     Both run on data already downloaded for calibration, so they cost nothing
+     over the wire.
+     ========================================================================== */
+
+  /* Split-sample: calibrate on the first `frac` of the record, score on the
+     rest. Cheaper settings than the production fit — this is a diagnostic, not
+     the model that ships. */
+  function splitSample(forcing, obs, windows, area, dtHours, opts) {
+    opts = opts || {};
+    var cut = Math.floor(windows.length * (opts.frac || 0.6));
+    var warm = Math.min(180, Math.floor(cut * 0.25));
+    if (cut < 250 || windows.length - cut < 120) return null;
+
+    var cal = calibrate(forcing, obs.slice(0, cut), windows.slice(0, cut), area, dtHours,
+      { pop: opts.pop || 24, gen: opts.gen || 40, warmup: warm, seed: 21 });
+
+    var sim = simulate(forcing, cal.par, area, dtHours);
+    var agg = aggregate(sim.q, windows);
+
+    return {
+      cut: cut,
+      nCal: cut - warm, nVal: windows.length - cut,
+      kgeCal: kge(agg.slice(warm, cut), obs.slice(warm, cut), 'sqrt'),
+      kgeVal: kge(agg.slice(cut), obs.slice(cut), 'sqrt'),
+      nseVal: nse(Array.prototype.slice.call(agg.slice(cut)), obs.slice(cut))
+    };
+  }
+
+  /* --------------------------------------------------------------------------
+     ROLLING-ORIGIN BACKTEST, at daily resolution, over the whole record.
+
+     Uses the daily mean record the calibration already pulled, so it spans
+     every flood and every drought in two years rather than whatever the last
+     fortnight happened to contain. Results are broken down by flow regime,
+     because a river's forecastability in a flood and in an August recession are
+     not remotely the same number, and an average across both tells you nothing
+     useful on the day.
+
+     It also sweeps the assimilation weight. How hard to pull the model onto the
+     live gauge reading is not a universal constant — on a flashy catchment
+     where the model is often out of phase, a full correction wins; on a big
+     slow river where the model is already close, over-correcting on a single
+     noisy reading makes things worse. Each river picks its own from its own
+     record.
+     ------------------------------------------------------------------------ */
+  function backtestDaily(forcing, windows, obs, par, area, dtHours, opts) {
+    opts = opts || {};
+    var leadDays = opts.leadDays || 5;
+    var warm = opts.warmup || 180;
+    var weights = opts.weights || [0, 0.5, 0.75, 1];
+    var stepsPerDay = Math.round(24 / dtHours);
+    var n = windows.length;
+    if (n < warm + leadDays + 30) return null;
+
+    var states = new Array(forcing.p.length);
+    var base = simulate(forcing, par, area, dtHours, null, null, states);
+    var baseAgg = aggregate(base.q, windows);
+
+    var st = flowStats(obs);
+    var loBound = st ? st.q60 : 0;          /* below this = low flow  */
+    var hiBound = st ? st.q20 : Infinity;   /* above this = high flow */
+
+    /* seasonal climatology: median flow for the calendar month of each origin */
+    var climo = seasonalMedian(obs, opts.months);
+
+    function runWeight(w) {
+      var sumM = zeros(leadDays), sumP = zeros(leadDays), sumC = zeros(leadDays),
+          cnt = zeros(leadDays), sumLog2 = zeros(leadDays);
+      var reg = { low: blank(leadDays), mid: blank(leadDays), high: blank(leadDays) };
+
+      for (var o = warm; o + leadDays < n; o++) {
+        if (!(obs[o] > 0)) continue;
+        var end = windows[o][1] - 1;
+        if (end < 0 || end >= states.length) continue;
+
+        var a = assimilate(states[end], baseAgg[o], obs[o], par, { weight: w });
+        var from = windows[o][1];
+        var sub = sliceForcing(forcing, from, from + leadDays * stepsPerDay);
+        if (sub.p.length < leadDays * stepsPerDay) break;
+        var fc = simulate(sub, par, area, dtHours, null, a.state).q;
+
+        var band = obs[o] < loBound ? 'low' : (obs[o] > hiBound ? 'high' : 'mid');
+
+        for (var L = 0; L < leadDays; L++) {
+          var ob = obs[o + 1 + L];
+          if (!(ob > 0)) continue;
+          var s = 0;
+          for (var i = L * stepsPerDay; i < (L + 1) * stepsPerDay; i++) s += fc[i];
+          var pred = s / stepsPerDay;
+
+          var eM = Math.abs(pred - ob), eP = Math.abs(obs[o] - ob), eC = Math.abs(climo(o + 1 + L) - ob);
+          sumM[L] += eM; sumP[L] += eP; sumC[L] += eC; cnt[L]++;
+          var lr = Math.log(Math.max(pred, 1e-6)) - Math.log(ob);
+          sumLog2[L] += lr * lr;
+
+          reg[band].m[L] += eM; reg[band].p[L] += eP; reg[band].n[L]++;
+        }
+      }
+
+      var mae = [], per = [], cli = [], skill = [], sigma = [];
+      for (var L2 = 0; L2 < leadDays; L2++) {
+        var c = cnt[L2] || 1;
+        mae.push(sumM[L2] / c); per.push(sumP[L2] / c); cli.push(sumC[L2] / c);
+        skill.push(sumP[L2] > 0 ? 1 - sumM[L2] / sumP[L2] : 0);
+        sigma.push(Math.sqrt(sumLog2[L2] / c));
+      }
+      return { weight: w, mae: mae, per: per, climo: cli, skill: skill, sigma: sigma,
+               n: cnt[0] || 0, regime: summariseRegimes(reg, leadDays) };
+    }
+
+    var runs = weights.map(runWeight).filter(function (r) { return r.n > 20; });
+    if (!runs.length) return null;
+
+    /* Choose the assimilation weight on mean skill across the first three days
+       — the range anyone actually plans around. */
+    var best = runs[0];
+    runs.forEach(function (r) {
+      if (meanOf(r.skill.slice(0, 3)) > meanOf(best.skill.slice(0, 3))) best = r;
+    });
+
+    return { best: best, runs: runs, nOrigins: best.n,
+             bounds: { low: loBound, high: hiBound } };
+  }
+
+  function zeros(n) { return new Float64Array(n); }
+  function blank(n) { return { m: zeros(n), p: zeros(n), n: zeros(n) }; }
+  function meanOf(a) { return a.reduce(function (x, y) { return x + y; }, 0) / (a.length || 1); }
+
+  function summariseRegimes(reg, leadDays) {
+    var out = {};
+    ['low', 'mid', 'high'].forEach(function (k) {
+      var r = reg[k], mae = [], skill = [], nn = 0;
+      for (var L = 0; L < leadDays; L++) {
+        var c = r.n[L] || 1;
+        mae.push(r.m[L] / c);
+        skill.push(r.p[L] > 0 ? 1 - r.m[L] / r.p[L] : 0);
+        nn = Math.max(nn, r.n[L]);
+      }
+      out[k] = { mae: mae, skill: skill, n: nn };
+    });
+    return out;
+  }
+
+  /* Median flow for the calendar month an index falls in — a fairer
+     climatology baseline than one flat number across the whole year. */
+  function seasonalMedian(obs, months) {
+    if (!months || months.length !== obs.length) {
+      var flat = median(obs.filter(function (v) { return v > 0; }));
+      return function () { return flat; };
+    }
+    var buckets = {};
+    for (var i = 0; i < obs.length; i++) {
+      if (!(obs[i] > 0)) continue;
+      (buckets[months[i]] = buckets[months[i]] || []).push(obs[i]);
+    }
+    var med = {};
+    Object.keys(buckets).forEach(function (m) { med[m] = median(buckets[m]); });
+    var fallback = median(obs.filter(function (v) { return v > 0; }));
+    return function (i) {
+      var m = months[i];
+      return (m != null && med[m] != null) ? med[m] : fallback;
+    };
+  }
+
   /* --------------------------------------------------------------------------
      FLOW STATISTICS — the flow duration curve
 
@@ -595,6 +775,7 @@
     warmStart: warmStart, assimilate: assimilate,
     ensemble: ensemble, probInBand: probInBand,
     hindcast: hindcast, sliceForcing: sliceForcing,
+    splitSample: splitSample, backtestDaily: backtestDaily,
     flowStats: flowStats, describeFlow: describeFlow,
     fitRating: fitRating, flowToLevel: flowToLevel,
     quantile: quantile, normCdf: normCdf, mmToCumecs: mmToCumecs

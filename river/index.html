@@ -136,6 +136,14 @@ table.verif td.bad{color:var(--bad);font-weight:700}
 .verdict-line.good{border-left-color:var(--good);color:var(--good)}
 .verdict-line.ok{border-left-color:var(--warn);color:var(--warn)}
 .verdict-line.bad{border-left-color:var(--bad);color:var(--bad)}
+.regimes{display:flex;gap:7px;margin-top:14px}
+.rg{flex:1;background:var(--paper);border:1px solid transparent;border-radius:9px;padding:9px 5px;text-align:center}
+.rg.on{border-color:var(--accent);background:var(--accent-tint)}
+.rg .rgk{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--sub)}
+.rg .rgv{font-size:16px;font-weight:700;margin:3px 0 1px;font-family:var(--mono)}
+.rg .rgv.good{color:var(--good)}
+.rg .rgv.bad{color:var(--bad)}
+.rg .rgn{font-size:9.5px;color:var(--sub)}
 
 .spin{width:20px;height:20px;border:2.5px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:sp .8s linear infinite;margin-bottom:9px}
 @keyframes sp{to{transform:rotate(360deg)}}
