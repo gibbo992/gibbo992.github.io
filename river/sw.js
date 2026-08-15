@@ -3,7 +3,11 @@
    Shell is cache-first so the app opens instantly with no signal. API calls are
    network-first with a cache fallback, which matters on a riverbank: you get
    the last forecast you loaded rather than an error page. */
-const APP = 'riverwise-v1';
+/* BUMP THIS whenever any shell file changes. The shell is served cache-first,
+   so a device that has already installed the app keeps serving the old bundle
+   until the cache name changes and the activate handler purges the old one.
+   Forgetting this ships a release that never reaches existing installs. */
+const APP = 'riverwise-v2';
 const API = 'riverwise-api-v1';
 const TILES = 'riverwise-tiles-v1';
 const LEAFLET_CSS = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
