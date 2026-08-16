@@ -946,7 +946,7 @@
       if (S.runRegion === 'ew'  && r.s.country !== 'England/Wales') return false;
       if (S.runRegion === 'sco' && r.s.country !== 'Scotland') return false;
       if (S.runRegion === 'fc'  && !r.canForecast) return false;
-      if (S.runQ && r.s.name.toLowerCase().indexOf(S.runQ.toLowerCase()) < 0) return false;
+      if (S.runQ && (r.s.name + ' ' + (r.s.section || '')).toLowerCase().indexOf(S.runQ.toLowerCase()) < 0) return false;
       if (S.runFilter === 'all') return true;
       if (!r.cls) return false;
       if (S.runFilter === 'on')  return ['medium', 'high'].indexOf(r.cls.cat) >= 0;
@@ -954,11 +954,14 @@
       if (S.runFilter === 'big') return ['veryHigh', 'huge'].indexOf(r.cls.cat) >= 0;
       return true;
     });
-    /* runs that are in should surface first, then everything else by name */
+    /* runs that are in should surface first; within a river, sections stay in
+       their catalogue order so the list reads downstream */
     var rank = { medium: 0, high: 1, veryHigh: 2, low: 3, scrape: 4, huge: 5, tooLow: 6 };
     return list.sort(function (a, b) {
       var ra = a.cls ? rank[a.cls.cat] : 9, rb = b.cls ? rank[b.cls.cat] : 9;
-      return ra !== rb ? ra - rb : (a.s.name < b.s.name ? -1 : 1);
+      if (ra !== rb) return ra - rb;
+      if (a.s.river !== b.s.river) return a.s.river < b.s.river ? -1 : 1;
+      return (a.s.section || '') < (b.s.section || '') ? -1 : 1;
     });
   }
 
@@ -1055,6 +1058,9 @@
     if (r.s.km) meta.push(esc(r.s.km) + ' km');
     meta.push(r.s.country === 'Scotland' ? 'Scotland' : 'England &amp; Wales');
 
+    /* Each row is one section, and 45 rivers here have several. The section
+       name is what distinguishes them, so it is always shown in full rather
+       than truncated — otherwise four Tees rows look identical. */
     return '<button class="row" data-run="' + esc(r.s.slug) + '">'
       + '<div class="rowtop"><div class="rowname">'
       + '<b>' + esc(r.s.river || r.s.name) + '</b>'
