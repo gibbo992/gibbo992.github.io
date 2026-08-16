@@ -7,7 +7,7 @@
    so a device that has already installed the app keeps serving the old bundle
    until the cache name changes and the activate handler purges the old one.
    Forgetting this ships a release that never reaches existing installs. */
-const APP = 'riverwise-v2';
+const APP = 'riverwise-v3';
 const API = 'riverwise-api-v1';
 const TILES = 'riverwise-tiles-v1';
 const LEAFLET_CSS = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
